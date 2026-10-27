@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "langchain>=1.4.7",
     "langchain-community>=0.4.2",
+    "langchain-core>=1.7.0",
     "langgraph>=1.2.18",
     "langsmith>=0.14.13",
     "ragas>=0.4.3",
