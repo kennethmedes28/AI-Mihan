@@ -1,0 +1,30 @@
+Agency,Category,Contact Type,Number,Notes
+National Emergency Hotline,Police / Fire / Medical,Hotline,911,Unified nationwide emergency number
+Philippine Red Cross,Medical / Disaster,Hotline,143,
+Philippine Red Cross,Medical / Disaster,Landline,(02) 8527-0000,
+Philippine Red Cross,Medical / Disaster,Landline,(02) 8790-2300,
+Philippine Red Cross,Medical / Disaster,Landline,(02) 8527-8385 to 95,National Blood Center
+Philippine National Police (PNP),Police,Hotline,117,
+Philippine National Police (PNP),Police,Text,Text PNP to 2920,
+Philippine National Police (PNP),Police,Landline,(02) 8722-0650,Emergency line
+Philippine National Police (PNP),Police,Mobile / Text,0917-847-5757,Text hotline
+Bureau of Fire Protection (BFP) NCR,Fire,Landline,(02) 8426-0219,
+Bureau of Fire Protection (BFP) NCR,Fire,Landline,(02) 8426-0246,
+MMDA,Roads / Rescue,Hotline,136,Metro Manila
+MMDA,Roads / Rescue,Landline,(02) 8882-4151 to 77,
+NDRRMC,Disaster,Trunk line,(02) 8911-5061 to 65 local 100,
+NDRRMC,Disaster,Operations Center,(02) 8911-1406,
+NDRRMC,Disaster,Operations Center,(02) 8912-2665,
+NDRRMC,Disaster,Operations Center,(02) 8912-5668,
+NDRRMC,Disaster,Operations Center,(02) 8911-1873,
+PAGASA,Weather,Landline,(02) 8284-0800,
+Philippine Coast Guard,Maritime,Landline,(02) 8527-8481 to 89,
+Philippine Coast Guard,Maritime,Mobile / Text,0917-724-3682,Text hotline
+Philippine Coast Guard,Maritime,Mobile / Text,0918-967-4697,Text hotline
+DSWD,Women and Children (VAWC),Landline,(02) 8931-8101 to 07,
+DSWD-NCR,Women and Children (VAWC),Landline,(02) 8734-8639,
+PNP,Women and Children (VAWC),Landline,(02) 8723-0401 to 20,
+PNP Women and Children Protection Center,Women and Children (VAWC),Landline,(02) 3410-3213,
+Barangay / City Rescue,Local,Local,Add your own,Save your local numbers
+Nearest Fire Station,Local,Local,Add your own,
+Nearest Hospital,Local,Local,Add your own,
