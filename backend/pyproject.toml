@@ -4,4 +4,11 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "fastapi>=0.115.0",
+    "langchain>=1.4.7",
+    "langchain-community>=0.4.2",
+    "langgraph>=1.2.18",
+    "langsmith>=0.14.13",
+    "ragas>=0.4.3",
+]
