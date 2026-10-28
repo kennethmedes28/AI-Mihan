@@ -13,7 +13,7 @@ import json
 
 from src.rag.models import Chunk, SearchFilter
 
-# Must match the embedding model (bge-m3 produces 1024 numbers per text).
+# Must match the embedding model (bge-m3 and multilingual-e5-large produce 1024 numbers per text).
 EMBEDDING_DIM = 1024
 
 CREATE_SCHEMA_SQL = f"""

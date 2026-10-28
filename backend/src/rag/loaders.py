@@ -2,14 +2,16 @@
 
 Sources:
     * text, Markdown and PDF files (preparedness manuals)
-    * a CSV of evacuation centers
+    * a CSV of evacuation centers a CSV of emergency hotlines and a CSV of NCR location elevations
     * the official PAGASA pages (reuses the fetcher in agents/)
 
-PDF reading needs the optional ``pypdf`` library: ``uv sync --extra rag``.
+PDF reading needs ``pypdf``. Scanned pages are read with the ``tesseract`` program.
 """
 
 import csv
 import logging
+import subprocess
+import tempfile
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -21,16 +23,44 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_SUFFIXES = {".md", ".txt", ".pdf"}
 PAGASA_VALID_HOURS = 24  # a bulletin is treated as current for a day
+MIN_PAGE_CHARS = 50  # a PDF page with less text than this is treated as a scan
+OCR_DPI = 200
+
+
+def ocr_pdf_page(path: Path, page_number: int) -> str:
+    """Read one scanned PDF page with Tesseract (needs the ``tesseract`` program and PyMuPDF)."""
+    import pymupdf  # imported here because it is only needed for scanned files
+
+    with pymupdf.open(str(path)) as pdf, tempfile.TemporaryDirectory() as folder:
+        image_path = Path(folder) / "page.png"
+        pdf[page_number].get_pixmap(dpi=OCR_DPI).save(str(image_path))
+        result = subprocess.run(
+            ["tesseract", str(image_path), "stdout", "-l", "eng"],
+            capture_output=True, text=True, check=True,
+        )
+    return result.stdout
+
+
+def read_pdf_text(path: Path) -> str:
+    """Return the text of a PDF. Pages with no text layer (scans) are read with OCR."""
+    try:
+        from pypdf import PdfReader
+    except ImportError as error:
+        raise RuntimeError("pypdf is not installed. Run: uv sync --extra rag") from error
+
+    page_texts = []
+    for number, page in enumerate(PdfReader(str(path)).pages):
+        text = page.extract_text() or ""
+        if len(text.strip()) < MIN_PAGE_CHARS:
+            text = ocr_pdf_page(path, number)
+        page_texts.append(text)
+    return "\n\n".join(page_texts)
 
 
 def read_file_text(path: Path) -> str:
     """Return the text of a .txt, .md or .pdf file."""
     if path.suffix.lower() == ".pdf":
-        try:
-            from pypdf import PdfReader
-        except ImportError as error:
-            raise RuntimeError("pypdf is not installed. Run: uv sync --extra rag") from error
-        return "\n\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
+        return read_pdf_text(path)
 
     return path.read_text(encoding="utf-8")
 
@@ -78,6 +108,63 @@ def load_evacuation_centers_csv(path: str | Path) -> list[Document]:
             text="\n".join(lines),
             doc_type="record",
             metadata={"city": city, "agency": "LGU", "trust_tier": "official", "hazard": None},
+        )
+        for city, lines in lines_by_city.items()
+    ]
+
+
+def load_emergency_contacts_csv(path: str | Path) -> list[Document]:
+    """Load a hotline list (columns Agency, Category, Contact Type, Number, Notes).
+
+    One line per number, so each number becomes one chunk. Rows still holding the
+    "Add your own" placeholder are skipped because they have no real number.
+    """
+    lines = []
+
+    # utf-8-sig drops the invisible marker Excel puts at the start of CSV files.
+    with open(path, newline="", encoding="utf-8-sig") as file:
+        for row in csv.DictReader(file):
+            number = row["Number"].strip()
+            if not number or number.lower() == "add your own":
+                continue
+            line = f"{row['Agency']} ({row['Category']}), {row['Contact Type']}: {number}"
+            if row["Notes"].strip():
+                line += f". {row['Notes'].strip()}"
+            lines.append(line)
+
+    return [
+        Document(
+            doc_id=Path(path).stem,
+            text="\n".join(lines),
+            doc_type="record",
+            metadata={"source": Path(path).name, "trust_tier": "official", "hazard": None},
+        )
+    ]
+
+
+def load_ncr_locations_csv(path: str | Path) -> list[Document]:
+    """Load sampled NCR points (columns location_id, latitude, longitude, elevation_m, coord_group, city).
+
+    One document per city with one line per point, so each point becomes one chunk
+    and searches can be limited to a city. Low elevation is useful flood context.
+    """
+    lines_by_city = defaultdict(list)
+
+    with open(path, newline="", encoding="utf-8-sig") as file:
+        for row in csv.DictReader(file):
+            city = row["city"].strip()
+            line = (
+                f"{city} location {row['location_id']}: elevation {float(row['elevation_m']):g} m, "
+                f"latitude {row['latitude']}, longitude {row['longitude']}"
+            )
+            lines_by_city[city].append(line)
+
+    return [
+        Document(
+            doc_id=f"ncr-locations-{city.lower().replace(' ', '-')}",
+            text="\n".join(lines),
+            doc_type="record",
+            metadata={"source": Path(path).name, "city": city, "trust_tier": "official", "hazard": None},
         )
         for city, lines in lines_by_city.items()
     ]

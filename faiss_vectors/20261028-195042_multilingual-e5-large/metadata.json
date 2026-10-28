@@ -1,0 +1,34 @@
+{
+  "run_name": "20261028-195042_multilingual-e5-large",
+  "created_at": "2026-10-28T19:50:42+08:00",
+  "embedding_model": "intfloat/multilingual-e5-large",
+  "embedding_dim": 1024,
+  "index_type": "IndexFlatIP (cosine, normalized vectors)",
+  "chunk_count": 359,
+  "source_files": [
+    {
+      "name": "20260914-NDRRMC-IRR-RA12287.pdf",
+      "sha256": "0520e8ad3baebd1c1be4deac68b19520f848af5c1eee526de4d0d144511d5f1a"
+    },
+    {
+      "name": "DISASTER PREPAREDNESS MANUAL.pdf",
+      "sha256": "c436ae929b591dfdd42e60c2d46636ec116dd98d2c0ddc0e19b391568a43804f"
+    },
+    {
+      "name": "ncr_locations.csv",
+      "sha256": "645cc612f40090910bf582df52e1d2b18de418ef3787d22eb922d325ce46a4d6"
+    },
+    {
+      "name": "ncrpasig-marikina-laguna-de-bay.pdf",
+      "sha256": "f56d4d570e183c2c4a28743188d457e727bda91e0e6ed58b283c46efbe07342d"
+    },
+    {
+      "name": "ph_emergency_contacts.csv",
+      "sha256": "d7a9e9002e85a14597d7b5f5dea3d085420b1eb2a6ba922de79acd25fcf8bfa0"
+    },
+    {
+      "name": "world-bank.pdf",
+      "sha256": "5aef6311aad2b81ba282522ce5c1900f934e3937e032be6cc0329befb7c26eb5"
+    }
+  ]
+}

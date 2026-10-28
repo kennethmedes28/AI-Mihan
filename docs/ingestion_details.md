@@ -13,6 +13,10 @@ to be tuned against the evaluation golden set described in section 8.
 | Long guides | NDRRMC / OCD preparedness manuals | Long, hierarchical, rarely change |
 | Community reports | Resident incident and supply-request reports | Noisy, unverified, short |
 | Weather data | Open-Meteo forecasts | Structured, refreshed often |
+| Scanned documents | NDRRMC IRR of RA 12287 | No text layer; must be OCR'd before chunking |
+| Location data | NCR points with elevation | Numbers, not prose; weak for embeddings |
+
+Files currently ingested from `corpus/` are listed with measurements in `docs/ingestion_assesment.md`.
 
 Queries mix English and Filipino and often contain exact tokens: typhoon names ("Carina"),
 city and barangay names, "Signal No. 3", phone numbers. Dense embeddings handle paraphrase and
@@ -28,8 +32,13 @@ half, so the strategy depends on the source.
 |---|---|---|
 | Advisories, bulletins | Structure-aware split on headings and sections. Keep whole if under ~600 tokens. | 300-500 tokens, ~10% overlap |
 | Manuals, guides | Heading-aware recursive split (Markdown or PDF section hierarchy). Prepend the heading path to each chunk. | 400-600 tokens, 50-80 overlap |
-| Evacuation centers, hotlines | No splitting. One record per row, rendered as a sentence: "Center X, Barangay Y, City Z, capacity N." | One record = one chunk |
+| Evacuation centers, hotlines | No splitting. One record per row, rendered as a sentence: "Center X, Barangay Y, City Z, capacity N." Hotlines: "Marikina City Rescue (Local - City Rescue), Landline: (02) 8646-2426." | One record = one chunk |
+| NCR location points | One record per point, grouped by city: "Manila location 2: elevation 9 m, latitude ..., longitude ...". City stored in metadata. | One point = one chunk |
 | Community reports | One chunk per report. Trust level kept in metadata. | One report = one chunk |
+
+Sizes in code are counted in **words** (about 1.3 tokens per word): manuals use 400 words with
+50 overlap, advisories 300 with 30. PDF text is read page by page; a page with fewer than 50
+characters is treated as a scan and read with Tesseract OCR (`loaders.py`).
 
 ### Chunking decision flow
 
@@ -86,9 +95,10 @@ flowchart LR
     F[Fetch] --> N[Clean / normalize]
     N --> CH[Chunk by source type]
     CH --> EN[Enrich:<br/>context header + metadata]
-    EN --> EM[Embed<br/>bge-m3 / multilingual-e5]
+    EN --> EM[Embed<br/>multilingual-e5-large]
     EN --> BI[Tokenize]
     EM --> PG[(Supabase pgvector<br/>HNSW, cosine)]
+    EM --> FX[(FAISS run folder<br/>faiss_vectors/)]
     BI --> BM[(BM25 index<br/>bm25s, in process)]
 ```
 
@@ -140,8 +150,27 @@ sequenceDiagram
 ```
 
 ### Dense retriever
-- Multilingual embedding model: `bge-m3` or `multilingual-e5` (Tagalog support is required).
+- Multilingual embedding model: **`intfloat/multilingual-e5-large`** (1024 dimensions, Tagalog
+  support is required). Chosen over `bge-m3` and `multilingual-e5-base` in `docs/ingestion_assesment.md`.
+  Override with the `EMBEDDING_MODEL` environment variable; changing it means re-embedding everything.
+- E5 models need `query: ` / `passage: ` in front of the text. `embeddings.py` adds them
+  (chunks as passages, questions as queries).
 - Stored in Supabase pgvector with an HNSW index, cosine distance.
+- Also saved as a local FAISS snapshot (see "FAISS snapshots" below).
+
+### FAISS snapshots
+
+`scripts/ingest_corpus.py` writes every run to its own folder, so earlier runs are never overwritten:
+
+```
+faiss_vectors/<YYYYmmdd-HHMMSS>_<model name>/
+    index.faiss     vectors, exact cosine search (IndexFlatIP on normalized vectors)
+    chunks.json     id, doc_id, chunk_idx, text and metadata; row i matches index row i
+    metadata.json   model, vector size, time, chunk count, SHA-256 of each source file
+```
+
+Code: `backend/src/rag/faiss_store.py` (`save_run`, `load_run`). Supabase is written only with
+`--supabase` and needs `SUPABASE_DB_URL`.
 
 ### Sparse retriever (BM25)
 - Real BM25, not Postgres `ts_rank`, which has no inverse-document-frequency saturation.
@@ -261,7 +290,9 @@ flowchart LR
 - Fusion: `EnsembleRetriever` (RRF built in) or a small custom RRF function if per-query weights are needed.
 - Reranking: `ContextualCompressionRetriever` wrapping the cross-encoder.
 - Already in `backend/pyproject.toml`: `langchain`, `langchain-community`, `langgraph`.
-- New dependencies: `bm25s`, `sentence-transformers` (or `FlagEmbedding`), `pgvector`.
+- Added so far: `sentence-transformers`, `pypdf`, `pymupdf`, `faiss-gpu`, `psycopg[binary]`,
+  `colpali-engine` (benchmark only), `torch`. The Tesseract program must be installed for scans.
+- Still to add: `bm25s`. (`pgvector` is not needed: embeddings are sent as text and cast with `::vector`.)
 
 ## 7. Phased rollout
 
@@ -284,6 +315,7 @@ flowchart LR
 Tie into `docs/evaluation_rubric.md`.
 
 - Build a golden set of about 50 bilingual (English / Filipino) NCR queries with labeled relevant chunks.
+  So far only a 9-question keyword-labelled starter set exists (`notebooks/embedding_readiness.ipynb`).
 - Metrics: recall@k, MRR, nDCG@5, and answer groundedness (does the answer cite retrieved text).
 - Ablation to justify each stage: dense only, BM25 only, hybrid, hybrid + rerank.
 - Tune chunk sizes, `k`, RRF weights, and the rerank threshold on this set.
@@ -294,4 +326,9 @@ Tie into `docs/evaluation_rubric.md`.
 - **Reranker latency**: roughly 200-500 ms for 40 candidates on CPU. Mitigate by trimming to 20-30
   candidates or using a hosted reranker.
 - **In-process BM25 index**: rebuilt on ingest and duplicated per replica. Fine for MVP; revisit with ParadeDB / OpenSearch if it grows.
+- **Scanned documents**: OCR text has noise (logos, stamps) and is English only. Check OCR'd
+  chunks by eye before trusting citations from them.
+- **Table-like manual pages**: checklists and blank forms make low-value chunks that can rank high.
+- **Numeric location data**: embeddings are weak on coordinates and elevations; prefer a
+  structured lookup by city for flood-risk logic.
 - **Community report quality**: unverified content must never outrank official sources on safety-critical questions.

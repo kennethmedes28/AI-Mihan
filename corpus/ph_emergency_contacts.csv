@@ -1,4 +1,4 @@
-Agency,Category,Contact Type,Number,Notes
+﻿Agency,Category,Contact Type,Number,Notes
 National Emergency Hotline,Police / Fire / Medical,Hotline,911,Unified nationwide emergency number
 Philippine Red Cross,Medical / Disaster,Hotline,143,
 Philippine Red Cross,Medical / Disaster,Landline,(02) 8527-0000,
@@ -25,6 +25,87 @@ DSWD,Women and Children (VAWC),Landline,(02) 8931-8101 to 07,
 DSWD-NCR,Women and Children (VAWC),Landline,(02) 8734-8639,
 PNP,Women and Children (VAWC),Landline,(02) 8723-0401 to 20,
 PNP Women and Children Protection Center,Women and Children (VAWC),Landline,(02) 3410-3213,
-Barangay / City Rescue,Local,Local,Add your own,Save your local numbers
-Nearest Fire Station,Local,Local,Add your own,
-Nearest Hospital,Local,Local,Add your own,
+Caloocan City Rescue,Local - City Rescue,Landline,(02) 8288-7717,Caloocan South
+Caloocan City Rescue,Local - City Rescue,Landline,(02) 8277-2885,Caloocan North
+Caloocan City DRRMO,Local - City Rescue,Mobile,0916-797-6365,
+Las Piñas City DRRMO,Local - City Rescue,Landline,(02) 8552-7694,
+Las Piñas City DRRMO,Local - City Rescue,Landline,(02) 8776-7268,
+Makati City Rescue,Local - City Rescue,Hotline,168,Emergency rescue operations
+Makati City Rescue,Local - City Rescue,Landline,(02) 8870-1191,
+Makati City Rescue,Local - City Rescue,Landline,(02) 8870-1460,
+Makati City Rescue,Local - City Rescue,Landline,(02) 8236-5790,
+Malabon City DRRMO,Local - City Rescue,Landline,(02) 8921-6009,
+Malabon City DRRMO,Local - City Rescue,Landline,(02) 8921-6029,
+Malabon City DRRMO,Local - City Rescue,Mobile,0942-372-9891,
+Malabon City DRRMO,Local - City Rescue,Mobile,0919-062-5588,
+Mandaluyong City Rescue,Local - City Rescue,Landline,(02) 8533-2225,DRRMO
+Mandaluyong City Rescue,Local - City Rescue,Landline,(02) 8533-1897,
+Mandaluyong City Rescue,Local - City Rescue,Landline,(02) 8532-2189,
+Mandaluyong City Rescue,Local - City Rescue,Landline,(02) 8532-2402,
+Manila City Rescue,Local - City Rescue,Landline,(02) 8927-1335,
+Manila City Rescue,Local - City Rescue,Landline,(02) 8978-5312,
+Manila City Rescue,Local - City Rescue,Landline,(02) 8568-6909,
+Manila City Rescue,Local - City Rescue,Mobile,0950-700-3710,
+Manila City DRRMO,Local - City Rescue,Mobile,0932-662-2322,
+Marikina City Rescue,Local - City Rescue,Hotline,161,Rescue 161
+Marikina City Rescue,Local - City Rescue,Landline,(02) 8646-2436 to 38,
+Marikina City Rescue,Local - City Rescue,Landline,(02) 8646-2426,
+Marikina City Rescue,Local - City Rescue,Mobile,0998-997-0115,
+Marikina City Rescue,Local - City Rescue,Mobile,0998-579-6435,
+Muntinlupa City Rescue,Local - City Rescue,Hotline,137-175,Emergency hotline
+Muntinlupa City Rescue,Local - City Rescue,Landline,(02) 8925-4351,
+Muntinlupa City Rescue,Local - City Rescue,Landline,(02) 8373-5165,
+Navotas City Rescue,Local - City Rescue,Landline,(02) 8281-1111,
+Navotas City DRRMO,Local - City Rescue,Landline,(02) 8281-4174 local 407,
+Parañaque City Rescue,Local - City Rescue,Landline,(02) 8829-0922,
+Parañaque City Rescue,Local - City Rescue,Landline,(02) 8820-7783,Emergency Operations Center
+Parañaque City Rescue,Local - City Rescue,Mobile,0956-394-0176,Emergency Operations Center
+Parañaque City Rescue,Local - City Rescue,Mobile,0961-096-6249,Emergency Operations Center
+Pasay City Rescue,Local - City Rescue,Landline,(02) 8551-7777,
+Pasay City Rescue,Local - City Rescue,Landline,(02) 8833-8512,
+Pasay City DRRMO,Local - City Rescue,Mobile,0925-551-0450,
+Pasay City DRRMO,Local - City Rescue,Mobile,0905-493-9111,
+Pasig City Rescue,Local - City Rescue,Landline,(02) 8643-0000,
+Pasig City Rescue,Local - City Rescue,Landline,(02) 8632-0099,
+Pateros Rescue,Local - City Rescue,Landline,(02) 8642-5159,DRRMO
+Pateros Rescue,Local - City Rescue,Mobile,0949-811-5332,
+Quezon City Rescue,Local - City Rescue,Hotline,122,QC Emergency Hotline
+Quezon City Rescue,Local - City Rescue,Landline,(02) 8988-4242,
+Quezon City Rescue,Local - City Rescue,Mobile,0947-885-9929,
+Quezon City Rescue,Local - City Rescue,Mobile,0947-884-7498,
+San Juan City Rescue,Local - City Rescue,Landline,(02) 8238-4333,CDRRMO
+Taguig City Rescue,Local - City Rescue,Mobile,0917-550-3727,
+Taguig City Rescue,Local - City Rescue,Landline,(02) 8789-3200,
+Valenzuela City Rescue,Local - City Rescue,Landline,(02) 8352-5000,DRRMO
+Valenzuela City Rescue,Local - City Rescue,Landline,(02) 8292-1405,
+Valenzuela City Rescue,Local - City Rescue,Mobile,0915-259-8376,
+Valenzuela City Rescue,Local - City Rescue,Mobile,0919-009-4045,
+BFP Quezon City Fire District,Local - Fire,Landline,(02) 8924-1922,District office
+BFP Quezon City Fire District,Local - Fire,Landline,(02) 8928-3074,District office
+BFP Caloocan City Fire Station,Local - Fire,Landline,(02) 8310-6527,
+BFP Valenzuela Central Fire Station,Local - Fire,Landline,(02) 8292-3519,
+BFP Marikina Central Fire Station,Local - Fire,Landline,(02) 8586-4710,
+BFP Pasig Central Fire Station,Local - Fire,Landline,(02) 8641-2815,
+BFP Pasig Central Fire Station,Local - Fire,Landline,(02) 8535-7841,
+BFP Pateros Central Fire Station,Local - Fire,Landline,(02) 8641-1365,
+BFP Taguig City Fire Station,Local - Fire,Landline,(02) 8837-4496,
+BFP Taguig City Fire Station,Local - Fire,Mobile,0906-211-0919,
+BFP Mandaluyong Central Fire Station,Local - Fire,Landline,(02) 8532-2189,
+BFP Pasay Central Fire Station,Local - Fire,Landline,(02) 8844-2120,
+BFP Pasay Central Fire Station,Local - Fire,Landline,(02) 8843-6523,
+BFP Makati Central Fire Station,Local - Fire,Landline,(02) 8818-5150,
+BFP Makati Central Fire Station,Local - Fire,Landline,(02) 8816-2553,
+"BFP Fire District III (Makati, Pasay, Parañaque, Las Piñas, Muntinlupa)",Local - Fire,Landline,(02) 8816-0791,District office
+BFP Parañaque Central Fire Station,Local - Fire,Landline,(02) 8826-9131,
+BFP Las Piñas Central Fire Station,Local - Fire,Landline,(02) 8556-9634,
+BFP Las Piñas Central Fire Station,Local - Fire,Landline,(02) 8873-0611,
+BFP Muntinlupa Central Fire Station,Local - Fire,Landline,(02) 8842-2201,
+Philippine General Hospital (PGH),Local - Hospital,Landline,(02) 8554-8400,Manila; main trunkline
+Jose R. Reyes Memorial Medical Center,Local - Hospital,Landline,(02) 8711-9491 to 98,Manila
+Ospital ng Maynila Medical Center,Local - Hospital,Landline,(02) 8524-6063,Manila
+Ospital ng Tondo,Local - Hospital,Landline,(02) 8251-9402,Manila
+East Avenue Medical Center,Local - Hospital,Landline,(02) 8928-0611,Quezon City
+St. Luke's Medical Center Quezon City,Local - Hospital,Landline,(02) 8723-0101,Quezon City
+The Medical City,Local - Hospital,Landline,(02) 8988-1000,Pasig
+Makati Medical Center,Local - Hospital,Landline,(02) 8888-8999,Makati
+Asian Hospital and Medical Center,Local - Hospital,Landline,(02) 8771-9000,Muntinlupa
