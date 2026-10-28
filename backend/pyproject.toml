@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "bm25s>=0.3.15",
     "colpali-engine>=0.3.12",
     "faiss-gpu>=1.15.1",
     "fastapi>=0.115.0",
