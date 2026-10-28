@@ -2,7 +2,7 @@
 
 What we measured on the real corpus before embedding it, and what we decided.
 Design intent lives in `docs/ingestion_details.md`; this file records the evidence.
-Numbers come from the notebooks in `notebooks/` and the first full run (2026-10-28).
+Numbers come from the notebooks in `notebooks/embeddings/` and the first full run (2026-10-28).
 
 ## 1. Corpus
 
@@ -18,7 +18,7 @@ Numbers come from the notebooks in `notebooks/` and the first full run (2026-10-
 `ph_disaster_preparedness_manual.pdf` was a byte-identical copy of the manual and was removed.
 The ingest script also skips documents with identical text.
 
-## 2. PDF extraction (`notebooks/ingestion_benchmarks.ipynb`)
+## 2. PDF extraction (`notebooks/embeddings/ingestion_benchmarks.ipynb`)
 
 | File | pypdf | PyMuPDF | Empty pages |
 |---|---|---|---|
@@ -42,10 +42,10 @@ The ingest script also skips documents with identical text.
 - OCR text has some noise from the letterhead logo and the "CERTIFIED TRUE COPY" stamp.
   Only English is installed for Tesseract (`eng`); the IRR is English.
 - ColPali missed two questions (title of the IRR, definition of anticipatory actions). Kept as a
-  fallback idea if OCR quality turns out to be a problem (`notebooks/colpali_scanned_pdf.ipynb`).
+  fallback idea if OCR quality turns out to be a problem (`notebooks/embeddings/colpali_scanned_pdf.ipynb`).
 - Its labels cover only pages 1 and 5, so recall is a lower bound.
 
-## 4. Embedding model (`notebooks/embedding_readiness.ipynb`)
+## 4. Embedding model (`notebooks/embeddings/embedding_readiness.ipynb`)
 
 214 chunks from the manual, World Bank report and Marikina sheet (the scanned IRR had no text yet), 9 scored questions (English and Filipino).
 

@@ -315,7 +315,7 @@ flowchart LR
 Tie into `docs/evaluation_rubric.md`.
 
 - Build a golden set of about 50 bilingual (English / Filipino) NCR queries with labeled relevant chunks.
-  So far only a 9-question keyword-labelled starter set exists (`notebooks/embedding_readiness.ipynb`).
+  So far only a 9-question keyword-labelled starter set exists (`notebooks/embeddings/embedding_readiness.ipynb`).
 - Metrics: recall@k, MRR, nDCG@5, and answer groundedness (does the answer cite retrieved text).
 - Ablation to justify each stage: dense only, BM25 only, hybrid, hybrid + rerank.
 - Tune chunk sizes, `k`, RRF weights, and the rerank threshold on this set.
