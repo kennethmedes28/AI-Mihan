@@ -7,7 +7,7 @@ The model is large, so the library is optional and loaded on first use:
 
 The default model, intfloat/multilingual-e5-large, understands English and
 Filipino and produces 1024 numbers per text (``EMBEDDING_DIM`` in
-vector_store.py must match). It scored best in notebooks/embedding_readiness.ipynb.
+vector_store.py must match). It scored best in notebooks/embeddings/embedding_readiness.ipynb.
 Choose another model with the EMBEDDING_MODEL environment variable.
 
 E5 models expect "query: " / "passage: " in front of each text; this module adds

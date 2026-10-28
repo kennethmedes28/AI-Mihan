@@ -66,3 +66,40 @@ def fetch_recent_reports(
         limit=limit,
     )
     return conn.execute(sql, values).fetchall()
+
+
+def fetch_report_points(conn, hours: int = 6, hazard: str = "flood", limit: int = MAX_LIMIT) -> list[dict]:
+    """Return recent reports that have a map position (needs sql/001_reports_geo.sql).
+
+    Rejected reports are left out. Used to mark flooded spots for routing.
+    """
+    sql = _build_query(
+        "SELECT city, barangay, body, lat, lng, status, trust_level, created_at FROM reports",
+        [
+            "hazard ILIKE %s",
+            "lat IS NOT NULL",
+            "lng IS NOT NULL",
+            "status <> 'rejected'",
+            "created_at >= now() - make_interval(hours => %s)",
+        ],
+        order_by="created_at DESC",
+        limit=limit,
+    )
+    return conn.execute(sql, [hazard, int(hours)]).fetchall()
+
+
+def insert_report(
+    conn,
+    hazard: str,
+    city: str,
+    barangay: str | None,
+    body: str,
+    lat: float | None = None,
+    lng: float | None = None,
+) -> None:
+    """Store a community report. It starts unverified, with community trust."""
+    conn.execute(
+        "INSERT INTO reports (hazard, city, barangay, body, status, trust_level, lat, lng) "
+        "VALUES (%s, %s, %s, %s, 'unverified', 'community', %s, %s)",
+        [hazard, city, barangay, body, lat, lng],
+    )

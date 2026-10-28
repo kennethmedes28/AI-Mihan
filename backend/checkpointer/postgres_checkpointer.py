@@ -5,12 +5,12 @@ The checkpointer saves the graph state after every step, keyed by
 restarts. State is stored in the same Supabase Postgres database as the
 rest of the app.
 
-Typical use with FastAPI (open once at startup, close at shutdown):
+Typical use with FastAPI (see langgraph_orchestrator/service.py, which does this; open once at startup, close at shutdown):
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         async with open_postgres_checkpointer() as checkpointer:
-            app.state.graph = build_graph().compile(checkpointer=checkpointer)
+            app.state.graph = build_graph(llm, retriever, checkpointer)
             yield
 
     # Per request, use one thread id per conversation:
