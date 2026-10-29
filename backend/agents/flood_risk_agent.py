@@ -29,7 +29,7 @@ from pathlib import Path
 
 import httpx
 
-from agents.fetch_open_meteo import NCR_LOCATIONS, TIMEZONE
+from agents.fetch_supabase_open_meteo_datasets import NCR_LOCATIONS, TIMEZONE
 from agents.flood_types import (
     RISK_CRITICAL,
     RISK_HIGH,

@@ -5,6 +5,7 @@ Run from backend/ so the installed packages (pandas, httpx) are found:
     uv run python ../scripts/update_open_meteo_datasets.py --dry-run   # show the plan, call nothing
     uv run python ../scripts/update_open_meteo_datasets.py             # fetch and append
     uv run python ../scripts/update_open_meteo_datasets.py --end-date 2026-11-30
+    uv run python ../scripts/update_open_meteo_datasets.py --rebuild   # replace both files from 2020-01-01
 
 What it updates (the points come from datasets/ncr_locations.csv):
 
@@ -22,11 +23,19 @@ requests are cut into short windows. Locations that share coordinates are
 fetched once. Calls are spaced out, a "minutely" 429 waits and retries, and an
 hourly or daily 429 stops the run with nothing written.
 
-Known difference from the original data: every location in a coord_group is
-requested at the same coordinates, so they get the same river discharge.
+Locations that share coordinates get the same data. With one point per city
+(the current ncr_locations.csv) every location is requested separately.
+
+--rebuild ignores what is in the two files and fetches every day from 2020-01-01,
+then REPLACES both files. Use it after ncr_locations.csv changed (new points or
+new location_id meanings). It uses long windows (90 days of weather, a year of
+discharge) and waits 2 s between calls. Each finished coordinate is saved in a
+cache folder, so if a limit stops the run, running the same command again
+continues from where it stopped.
 """
 
 import argparse
+import tempfile
 import time
 from io import StringIO
 from datetime import date, timedelta
@@ -52,6 +61,14 @@ DEFAULT_END_LAG_DAYS = 2
 SECONDS_BETWEEN_CALLS = 0.5
 CHUNK_DAYS = 14  # longer ranges count as several calls against the limit
 MAX_CALLS_PER_RUN = 500
+
+# --rebuild: far more days, so longer windows, slower calls and a higher call cap.
+REBUILD_START = date(2020, 1, 1)
+REBUILD_ARCHIVE_WINDOW_DAYS = 90
+REBUILD_DISCHARGE_WINDOW_DAYS = 365
+REBUILD_SECONDS_BETWEEN_CALLS = 2.0
+REBUILD_MAX_CALLS = 2000
+DEFAULT_CACHE_DIR = Path(tempfile.gettempdir()) / "flood_gentic_open_meteo_cache"
 MAX_RETRIES = 3
 MINUTELY_LIMIT_WAIT_SECONDS = 61
 REQUEST_TIMEOUT_SECONDS = 30.0
@@ -75,8 +92,9 @@ class RateLimitError(RuntimeError):
 class OpenMeteoClient:
     """Small HTTP client that spaces out calls, retries politely and counts them."""
 
-    def __init__(self, max_calls: int):
+    def __init__(self, max_calls: int, seconds_between_calls: float = SECONDS_BETWEEN_CALLS):
         self.max_calls = max_calls
+        self.seconds_between_calls = seconds_between_calls
         self.calls_made = 0
         self._last_call_time = 0.0
         self._http = httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS)
@@ -87,7 +105,7 @@ class OpenMeteoClient:
             if self.calls_made >= self.max_calls:
                 raise RateLimitError(f"Stopped after {self.max_calls} calls (--max-calls).")
 
-            wait = SECONDS_BETWEEN_CALLS - (time.monotonic() - self._last_call_time)
+            wait = self.seconds_between_calls - (time.monotonic() - self._last_call_time)
             if wait > 0:
                 time.sleep(wait)
             self._last_call_time = time.monotonic()
@@ -137,12 +155,12 @@ def find_first_missing_day(weather: pd.DataFrame, locations: pd.DataFrame) -> da
     return min(first_missing)
 
 
-def split_into_windows(start: date, end: date) -> list[tuple[date, date]]:
-    """Cut start..end (inclusive) into windows of at most CHUNK_DAYS days."""
+def split_into_windows(start: date, end: date, window_days: int = CHUNK_DAYS) -> list[tuple[date, date]]:
+    """Cut start..end (inclusive) into windows of at most ``window_days`` days."""
     windows = []
     window_start = start
     while window_start <= end:
-        window_end = min(window_start + timedelta(days=CHUNK_DAYS - 1), end)
+        window_end = min(window_start + timedelta(days=window_days - 1), end)
         windows.append((window_start, window_end))
         window_start = window_end + timedelta(days=1)
     return windows
@@ -205,14 +223,18 @@ def fetch_discharge_window(client: OpenMeteoClient, latitude: float, longitude: 
 
 
 def fetch_point(client: OpenMeteoClient, latitude: float, longitude: float,
-                windows: list[tuple[date, date]]) -> pd.DataFrame:
-    """All new days for one coordinate: weather, hourly-derived values and discharge."""
-    pieces = []
-    for start, end in windows:
-        weather = fetch_archive_window(client, latitude, longitude, start, end)
-        discharge = fetch_discharge_window(client, latitude, longitude, start, end)
-        pieces.append(weather.merge(discharge, on="date", how="left"))
-    point_days = pd.concat(pieces, ignore_index=True)
+                archive_windows: list[tuple[date, date]],
+                discharge_windows: list[tuple[date, date]]) -> pd.DataFrame:
+    """All requested days for one coordinate: weather, hourly-derived values and discharge."""
+    weather = pd.concat(
+        [fetch_archive_window(client, latitude, longitude, start, end) for start, end in archive_windows],
+        ignore_index=True,
+    )
+    discharge = pd.concat(
+        [fetch_discharge_window(client, latitude, longitude, start, end) for start, end in discharge_windows],
+        ignore_index=True,
+    )
+    point_days = weather.merge(discharge, on="date", how="left")
 
     # The newest days can come back empty while Open-Meteo is still computing them.
     return point_days.dropna(subset=["precipitation_sum_mm"])
@@ -280,6 +302,11 @@ def merge_rows(csv_path: Path, rows: pd.DataFrame) -> None:
     combined.to_csv(csv_path, index=False, lineterminator="\n")
 
 
+def replace_rows(csv_path: Path, rows: pd.DataFrame) -> None:
+    """Overwrite a CSV with ``rows``, sorted by location_id then date (used by --rebuild)."""
+    rows.sort_values(["location_id", "date"]).to_csv(csv_path, index=False, lineterminator="\n")
+
+
 def sort_key(column: pd.Series) -> pd.Series:
     """Sort location_id as a number (so 10 comes after 9); dates already sort as text."""
     return column.astype(int) if column.name == "location_id" else column
@@ -288,7 +315,12 @@ def sort_key(column: pd.Series) -> pd.Series:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--end-date", help="last day to fetch, YYYY-MM-DD (default: today minus 2 days)")
-    parser.add_argument("--max-calls", type=int, default=MAX_CALLS_PER_RUN, help="stop if more calls are needed")
+    parser.add_argument("--max-calls", type=int, help=f"stop if more calls are needed (default {MAX_CALLS_PER_RUN}, "
+                                                      f"{REBUILD_MAX_CALLS} with --rebuild)")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="fetch everything from 2020-01-01 and replace both files")
+    parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR,
+                        help="where --rebuild keeps finished coordinates so it can be resumed")
     parser.add_argument("--dry-run", action="store_true", help="show the plan, make no requests, write nothing")
     args = parser.parse_args()
 
@@ -298,31 +330,53 @@ def main() -> None:
     feature_columns = list(pd.read_csv(FEATURES_CSV, nrows=0).columns)
 
     end = date.fromisoformat(args.end_date) if args.end_date else date.today() - timedelta(days=DEFAULT_END_LAG_DAYS)
-    start = find_first_missing_day(weather, locations)
+    if args.rebuild:
+        weather = weather.iloc[0:0]  # the old rows are not kept
+        start = REBUILD_START
+        archive_window_days, discharge_window_days = REBUILD_ARCHIVE_WINDOW_DAYS, REBUILD_DISCHARGE_WINDOW_DAYS
+        seconds_between_calls = REBUILD_SECONDS_BETWEEN_CALLS
+        max_calls = args.max_calls or REBUILD_MAX_CALLS
+    else:
+        start = find_first_missing_day(weather, locations)
+        archive_window_days = discharge_window_days = CHUNK_DAYS
+        seconds_between_calls = SECONDS_BETWEEN_CALLS
+        max_calls = args.max_calls or MAX_CALLS_PER_RUN
     if start > end:
         print(f"Already up to date: files end on {start - timedelta(days=1)}, requested end is {end}.")
         return
 
-    windows = split_into_windows(start, end)
+    archive_windows = split_into_windows(start, end, archive_window_days)
+    discharge_windows = split_into_windows(start, end, discharge_window_days)
     points = locations.drop_duplicates(["latitude", "longitude"])[["latitude", "longitude"]]
-    planned_calls = len(points) * len(windows) * 2  # one weather + one discharge call per window
-    print(f"Missing days: {start} to {end} ({len(windows)} windows)")
-    print(f"{len(points)} distinct coordinates for {len(locations)} locations -> {planned_calls} calls")
+    calls_per_point = len(archive_windows) + len(discharge_windows)  # weather + discharge requests
+    planned_calls = len(points) * calls_per_point
+    print(f"{'Rebuilding' if args.rebuild else 'Missing days'}: {start} to {end}")
+    print(f"{len(points)} distinct coordinates for {len(locations)} locations -> up to {planned_calls} calls")
     if args.dry_run:
         return
-    if planned_calls > args.max_calls:
-        raise SystemExit(f"{planned_calls} calls needed but --max-calls is {args.max_calls}. "
-                         "Raise it or use an earlier --end-date.")
+    if planned_calls > max_calls:
+        raise SystemExit(f"{planned_calls} calls needed but the limit is {max_calls}. "
+                         "Raise --max-calls or use an earlier --end-date.")
 
-    client = OpenMeteoClient(args.max_calls)
+    client = OpenMeteoClient(max_calls, seconds_between_calls)
+    if args.rebuild:
+        args.cache_dir.mkdir(parents=True, exist_ok=True)
+    days_by_coordinate = {}
     try:
-        days_by_coordinate = {}
         for point in points.itertuples():
+            cache_file = args.cache_dir / f"{point.latitude}_{point.longitude}_{start}_{end}.csv"
+            if args.rebuild and cache_file.exists():
+                print(f"cached   {point.latitude}, {point.longitude}")
+                days_by_coordinate[(point.latitude, point.longitude)] = pd.read_csv(cache_file, dtype={"date": str})
+                continue
             print(f"fetching {point.latitude}, {point.longitude}")
-            days_by_coordinate[(point.latitude, point.longitude)] = fetch_point(
-                client, point.latitude, point.longitude, windows)
+            point_days = fetch_point(client, point.latitude, point.longitude, archive_windows, discharge_windows)
+            if args.rebuild:
+                point_days.to_csv(cache_file, index=False)
+            days_by_coordinate[(point.latitude, point.longitude)] = point_days
     except RateLimitError as error:
-        raise SystemExit(f"{error}\nNothing was written.")
+        raise SystemExit(f"{error}\nThe data files were not changed."
+                         + (" Run the same command again later to continue." if args.rebuild else ""))
 
     # Give every location the days of its coordinate, then drop days that already exist.
     existing_keys = set(zip(weather["location_id"], weather["date"]))
@@ -348,9 +402,11 @@ def main() -> None:
     new_features = build_new_features(pd.concat([weather, new_weather], ignore_index=True), new_weather,
                                       hourly_columns, locations, feature_columns)
 
-    merge_rows(WEATHER_CSV, new_weather)
-    merge_rows(FEATURES_CSV, new_features)
-    print(f"Appended {len(new_weather)} rows ({new_weather['date'].min()} to {new_weather['date'].max()}) "
+    write_rows = replace_rows if args.rebuild else merge_rows
+    write_rows(WEATHER_CSV, new_weather)
+    write_rows(FEATURES_CSV, new_features)
+    print(f"{'Wrote' if args.rebuild else 'Appended'} {len(new_weather)} rows "
+          f"({new_weather['date'].min()} to {new_weather['date'].max()}) "
           f"to both files using {client.calls_made} calls.")
 
 

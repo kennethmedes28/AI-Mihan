@@ -1,4 +1,4 @@
-"""Fetch Open-Meteo weather data that matches a user's question.
+"""Fetch the Open-Meteo data that matches a user's question.
 
 The weather agent passes in the user's question (English, Filipino or a mix).
 This module works out three things from it:
@@ -7,18 +7,32 @@ This module works out three things from it:
     2. What:  which kinds of data are relevant (rain, wind, heat, ...).
     3. When:  how many days ahead to look.
 
-It then requests only the matching variables from Open-Meteo, so the agent
-receives focused data instead of everything the API offers.
+It then gets two kinds of data:
+
+    * the live forecast, requesting only the matching variables from the
+      Open-Meteo API, so the agent receives focused data instead of everything;
+    * the last few days of rain and river discharge for that city from the
+      Supabase dataset tables (kept current by scripts/update_open_meteo_datasets.py).
+
+The history is extra context. If Supabase is down, or the city is not in the
+dataset, the forecast is still returned.
 
 Example:
     data = fetch_open_meteo("Uulan ba bukas sa Quezon City?")
     data["plan"]     # what was detected: city, topics, days
     data["weather"]  # raw Open-Meteo response with only rain-related fields
+    data["history"]  # list of daily rows (oldest first), [] if the city has no
+                     # dataset, or None if Supabase could not be read
 """
+
+import logging
 
 import httpx
 
+from src.services.fetch_postgre_database import get_connection
 from utils.ttl_cache import ttl_cache
+
+logger = logging.getLogger(__name__)
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 TIMEZONE = "Asia/Manila"
@@ -27,6 +41,30 @@ FORECAST_CACHE_SECONDS = 30 * 60  # demo setting; Open-Meteo itself updates ever
 
 DEFAULT_CITY = "manila"
 DEFAULT_FORECAST_DAYS = 2
+
+HISTORY_DAYS = 7  # how many past days to read from Supabase
+HISTORY_CACHE_SECONDS = 30 * 60  # the tables only change once a day
+
+# One row per day for a city. A city can have several sample points, so rain
+# is averaged and the discharge / wet streak take the highest point. The
+# city name is compared without the accent ("Las Piñas" = "las pinas") and
+# without a trailing note ("Pateros (municipality)" = "pateros").
+HISTORY_SQL = """
+SELECT f.date,
+       ROUND(AVG(f.precipitation_sum_mm)::numeric, 1)::float AS rain_mm,
+       ROUND(AVG(f.rain_max_1h_mm)::numeric, 1)::float       AS rain_max_1h_mm,
+       ROUND(AVG(f.rain_3d_mm)::numeric, 1)::float           AS rain_3d_mm,
+       ROUND(AVG(f.rain_7d_mm)::numeric, 1)::float           AS rain_7d_mm,
+       ROUND(AVG(f.rain_14d_mm)::numeric, 1)::float          AS rain_14d_mm,
+       MAX(f.wet_streak_days)                                AS wet_streak_days,
+       MAX(f.river_discharge_m3s)::float                     AS river_discharge_m3s
+FROM ncr_flood_features_daily f
+JOIN ncr_locations l USING (location_id)
+WHERE translate(lower(regexp_replace(l.city, ' \\(.*\\)$', '')), 'ñ', 'n') = %s
+  AND f.date > (SELECT max(date) FROM ncr_flood_features_daily) - %s
+GROUP BY f.date
+ORDER BY f.date
+"""
 
 # Metro Manila cities: name -> (latitude, longitude).
 NCR_LOCATIONS = {
@@ -172,18 +210,24 @@ def build_plan(question: str) -> dict:
     }
 
 
-def fetch_open_meteo(question: str, client: httpx.Client | None = None) -> dict:
-    """Fetch the Open-Meteo data that matches the question.
+def fetch_open_meteo(
+    question: str, client: httpx.Client | None = None, include_history: bool = True
+) -> dict:
+    """Fetch the forecast (and recent history) that matches the question.
 
     Args:
         question: The user's question in English, Filipino, or mixed.
         client: Optional HTTP client, mainly so tests can avoid real requests.
+        include_history: Set to False to skip the Supabase read.
 
     Returns:
-        {"plan": <what was detected>, "weather": <Open-Meteo JSON response>}
+        {"plan": <what was detected>,
+         "weather": <Open-Meteo JSON response>,
+         "history": <recent daily rows, [] or None, see ``fetch_recent_history``>}
 
     Raises:
-        httpx.HTTPError: if the request fails or Open-Meteo returns an error.
+        httpx.HTTPError: if the forecast request fails or Open-Meteo returns an error.
+            A failed history read never raises; it gives ``"history": None``.
     """
     plan = build_plan(question)
 
@@ -203,7 +247,32 @@ def fetch_open_meteo(question: str, client: httpx.Client | None = None) -> dict:
     else:
         weather = download_forecast.__wrapped__(*request_args, client=client)
 
-    return {"plan": plan, "weather": weather}
+    history = fetch_recent_history(plan["city"]) if include_history else None
+    return {"plan": plan, "weather": weather, "history": history}
+
+
+def fetch_recent_history(city: str, days: int = HISTORY_DAYS) -> list[dict] | None:
+    """Return the last ``days`` days of rain and discharge for a city, oldest first.
+
+    Returns ``[]`` when the dataset has no sample point in that city (it covers
+    7 of the NCR cities), and ``None`` when Supabase could not be read.
+    """
+    try:
+        return download_history(city, days)
+    except Exception as error:  # the forecast is still useful without the history
+        logger.warning("Supabase history unavailable for %s: %s", city, error)
+        return None
+
+
+@ttl_cache(ttl_seconds=HISTORY_CACHE_SECONDS)
+def download_history(city: str, days: int) -> list[dict]:
+    """Read the daily rows from Supabase. Results are cached for a few minutes."""
+    with get_connection() as conn:
+        rows = conn.execute(HISTORY_SQL, (city, days)).fetchall()
+
+    for row in rows:
+        row["date"] = row["date"].isoformat()
+    return rows
 
 
 @ttl_cache(ttl_seconds=FORECAST_CACHE_SECONDS)
@@ -239,7 +308,7 @@ def download_forecast(
 
 
 if __name__ == "__main__":
-    # Quick manual check: python -m agents.fetch_open_meteo "Uulan ba bukas sa Makati?"
+    # Quick manual check: python -m agents.fetch_supabase_open_meteo_datasets "Uulan ba bukas sa Makati?"
     import json
     import sys
 

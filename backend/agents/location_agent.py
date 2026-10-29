@@ -20,7 +20,7 @@ from typing import Callable
 
 import httpx
 
-from agents.fetch_open_meteo import LOCATION_ALIASES, NCR_LOCATIONS
+from agents.fetch_supabase_open_meteo_datasets import LOCATION_ALIASES, NCR_LOCATIONS
 from agents.flood_types import (
     PRECISION_BARANGAY,
     PRECISION_CITY,

@@ -131,7 +131,26 @@ Without it the runner would start from the repository's old copy and request a l
 If branch protection blocks the push, either allow the Actions bot to bypass it or remove that step and run the fetch locally.
 If the sync fails, nothing is committed, so the next run fetches the same days again.
 
-## 7. Known limitations
+## 7. Reading the data in the weather agent
+
+`backend/agents/fetch_supabase_open_meteo_datasets.py` combines the live forecast with the stored history.
+For the city in the user's question it returns:
+
+| Key | Content |
+|---|---|
+| `plan` | the detected city, topics and forecast days |
+| `weather` | the live Open-Meteo forecast (current, hourly, daily) |
+| `history` | the last 7 days from `ncr_flood_features_daily`, one row per day, oldest first |
+
+Each history row has `date`, `rain_mm`, `rain_max_1h_mm`, `rain_3d_mm`, `rain_7d_mm`, `rain_14d_mm`, `wet_streak_days` and `river_discharge_m3s`.
+A city can have several sample points, so rain is averaged and discharge and wet streak take the highest point.
+The result is cached for 30 minutes because the tables change once a day.
+
+`history` is `[]` when the dataset has no point in that city (it covers Quezon City, Las Piñas, Manila, Valenzuela,
+Marikina, Pasig and Taguig) and `None` when Supabase cannot be read. Either way the forecast is still returned, and
+`weather_agent.py` only adds the "Recent days" lines to the prompt when there are rows. Pass `include_history=False` to skip the read.
+
+## 8. Known limitations
 
 - **River discharge does not match the old series.** The original data was requested at slightly different points inside each
   `coord_group`, but `ncr_locations.csv` stores one coordinate per group. Every location in a group now gets the same discharge, so

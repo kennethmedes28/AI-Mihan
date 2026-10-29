@@ -1,6 +1,6 @@
 """Fetch official PAGASA weather pages that match a user's question.
 
-Open-Meteo (see ``fetch_open_meteo.py``) gives model forecasts. This module
+Open-Meteo (see ``fetch_supabase_open_meteo_datasets.py``) gives model forecasts. This module
 adds the official side: bulletins, advisories and flood information that are
 only published as web pages on pagasa.dost.gov.ph.
 

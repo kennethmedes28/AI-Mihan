@@ -3,7 +3,8 @@
 It combines the two data sources written for this project:
 
     * ``fetch_weather_using_browser`` - official PAGASA bulletins and advisories
-    * ``fetch_open_meteo``            - model forecast for the city in the question
+    * ``fetch_supabase_open_meteo_datasets`` - model forecast for the city in the question,
+                                      plus its last few days of rain from Supabase
 
 The two sources do not depend on each other, so they are fetched at the same
 time. The slower one sets the wait, instead of the two waits adding up. If one
@@ -23,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 
-from agents.fetch_open_meteo import fetch_open_meteo
+from agents.fetch_supabase_open_meteo_datasets import fetch_open_meteo
 from agents.fetch_weather_using_browser import fetch_weather_pages
 from prompts.weather_prompt import WEATHER_PROMPT
 from utils.call_budget import BUSY_ANSWER, model_budget
@@ -171,7 +172,25 @@ def format_open_meteo(result: dict | None) -> str:
         ]
         lines.append(f"{date}: " + ", ".join(values))
 
+    lines.extend(format_history(result.get("history")))
     return "\n".join(lines)
+
+
+def format_history(history: list[dict] | None) -> list[str]:
+    """Write the recent past days (from the Supabase dataset) as short text lines.
+
+    Returns no lines when the history is missing, so the forecast is not affected.
+    """
+    if not history:
+        return []
+
+    lines = ["Recent days (observed, from the project dataset):"]
+    for row in history:
+        lines.append(
+            f"{row['date']}: rain {row['rain_mm']}mm, 3-day {row['rain_3d_mm']}mm, "
+            f"7-day {row['rain_7d_mm']}mm, river discharge {row['river_discharge_m3s']}m3/s"
+        )
+    return lines
 
 
 # --- The agent -----------------------------------------------------------------

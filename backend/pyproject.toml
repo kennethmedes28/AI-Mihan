@@ -24,4 +24,5 @@ dependencies = [
     "ragas>=0.4.3",
     "sentence-transformers>=6.2.0",
     "torch>=2.13.0",
+    "websockets>=15.0",
 ]
