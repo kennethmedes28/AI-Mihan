@@ -69,7 +69,7 @@ REBUILD_DISCHARGE_WINDOW_DAYS = 365
 REBUILD_SECONDS_BETWEEN_CALLS = 2.0
 REBUILD_MAX_CALLS = 2000
 DEFAULT_CACHE_DIR = Path(tempfile.gettempdir()) / "flood_gentic_open_meteo_cache"
-MAX_RETRIES = 3
+MAX_RETRIES = 5
 MINUTELY_LIMIT_WAIT_SECONDS = 61
 REQUEST_TIMEOUT_SECONDS = 30.0
 
@@ -111,7 +111,12 @@ class OpenMeteoClient:
             self._last_call_time = time.monotonic()
             self.calls_made += 1
 
-            response = self._http.get(url, params=params)
+            try:
+                response = self._http.get(url, params=params)
+            except httpx.TransportError as error:  # timeout, dropped connection, ...
+                print(f"  network problem ({type(error).__name__}), retrying")
+                time.sleep(2**attempt)
+                continue
             if response.status_code == 200:
                 return response.json()
 

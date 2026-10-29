@@ -169,6 +169,10 @@ faiss_vectors/<YYYYmmdd-HHMMSS>_<model name>/
     metadata.json   model, vector size, time, chunk count, SHA-256 of each source file
 ```
 
+When only some documents change, `scripts/refresh_location_chunks.py` writes a new run by copying the unchanged vectors from the
+newest run and re-embedding just the changed chunks (used when `corpus/ncr_locations.csv` changed). The newest folder is the one in use;
+`docs/ingestion_assesment.md` section 5 records which run that is.
+
 Code: `backend/src/rag/faiss_store.py` (`save_run`, `load_run`). Supabase is written only with
 `--supabase` and needs a Supabase connection in `backend/.env`: `SUPABASE_DB_URL`, or
 `SUPABASE_PROJECT_REF` + `SUPABASE_PASSWORD` + `SUPABASE_POOLER_HOST` (see `backend/.env.example`).
@@ -296,6 +300,11 @@ flowchart LR
 - Still to add: `bm25s`. (`pgvector` is not needed: embeddings are sent as text and cast with `::vector`.)
 
 ## 7. Phased rollout
+
+**Where things stand (2026-10-29):** the corpus is chunked, embedded with multilingual-e5-large and stored both as a FAISS run and in the
+Supabase `chunks` table (359 chunks). Code for BM25, RRF, the metadata filter, the cross-encoder reranker and the rules
+exists in `backend/src/rag/`, and the document agent uses it. The golden-set evaluation (section 8) has not been run, and the
+scheduled ingestion worker (section 5) is not built; ingestion is run by hand from `scripts/`.
 
 | Phase | Scope |
 |---|---|

@@ -9,7 +9,7 @@ Numbers come from the notebooks in `notebooks/embeddings/` and the first full ru
 | File | Type | Notes |
 |---|---|---|
 | `DISASTER PREPAREDNESS MANUAL.pdf` | Manual, 172 pages | Text layer; 16 pages have almost no text (images, blank pages) |
-| `world-bank.pdf` | Report, 113 pages | Text layer; 1 near-empty page |
+| `MMFMP.pdf` (was `world-bank.pdf`) | Report, 113 pages | Text layer; 1 near-empty page |
 | `ncrpasig-marikina-laguna-de-bay.pdf` | Map sheet, 2 pages | Text layer, short |
 | `20260914-NDRRMC-IRR-RA12287.pdf` | Law IRR, 17 pages | **Scanned: no text layer on any page** |
 | `ph_emergency_contacts.csv` | Hotlines, 110 rows | National, city rescue, fire stations, hospitals |
@@ -23,7 +23,7 @@ The ingest script also skips documents with identical text.
 | File | pypdf | PyMuPDF | Empty pages |
 |---|---|---|---|
 | Disaster manual (172 p) | 8.8 s | 0.9 s | 16 |
-| World Bank (113 p) | 3.5 s | 0.2 s | 1 |
+| MMFMP (113 p) | 3.5 s | 0.2 s | 1 |
 | Marikina / Laguna de Bay (2 p) | 0.17 s | 0.02 s | 0 |
 | NDRRMC IRR (17 p) | 0.09 s | 0.02 s | **17** |
 
@@ -47,7 +47,7 @@ The ingest script also skips documents with identical text.
 
 ## 4. Embedding model (`notebooks/embeddings/embedding_readiness.ipynb`)
 
-214 chunks from the manual, World Bank report and Marikina sheet (the scanned IRR had no text yet), 9 scored questions (English and Filipino).
+214 chunks from the manual, MMFMP report and Marikina sheet (the scanned IRR had no text yet), 9 scored questions (English and Filipino).
 
 | Model | Dim | Embed time | Peak GPU | recall@5 | MRR | MRR EN | MRR TL |
 |---|---|---|---|---|---|---|---|
@@ -67,13 +67,18 @@ Caveats:
 
 ## 5. First full run
 
-359 chunks, embedded with multilingual-e5-large and saved to
+359 chunks, embedded with multilingual-e5-large. The first run was saved to
 `faiss_vectors/20261028-195042_multilingual-e5-large/`.
+
+On 2026-10-29 the PDF was renamed `MMFMP.pdf` and `corpus/ncr_locations.csv` was replaced with one point per city.
+`scripts/refresh_location_chunks.py` re-embedded only the 17 location chunks and saved a new run,
+`faiss_vectors/20261029-213539_multilingual-e5-large/`, which is the one in use (359 vectors; the other 342 were copied,
+and the report's chunks are now named `MMFMP`). Supabase `chunks` holds the same 359 rows. The first run folder is no longer needed.
 
 | Source | Chunks |
 |---|---|
 | Disaster manual | 97 |
-| World Bank report | 115 |
+| MMFMP report (was World Bank) | 115 |
 | NDRRMC IRR (OCR) | 18 |
 | Marikina / Laguna de Bay | 2 |
 | Emergency contacts | 110 |
@@ -89,9 +94,8 @@ Spot checks on the saved index:
 
 ## 6. Known issues and next steps
 
-1. **Supabase write not done.** Connection is ready (`SUPABASE_PROJECT_REF`, `SUPABASE_PASSWORD`, `SUPABASE_POOLER_HOST` in `backend/.env`,
-   or `SUPABASE_DB_URL`) but the database has no `vector` extension or `chunks` table yet; then run the ingest
-   script with `--supabase`. Until then retrieval only exists as FAISS files.
+1. **Supabase write done.** The `chunks` table (pgvector) holds all 359 chunks. Connection settings are
+   `SUPABASE_DB_URL`, or `SUPABASE_PROJECT_REF` + `SUPABASE_PASSWORD` + `SUPABASE_POOLER_HOST` in `backend/.env`.
 2. **Table-like pages in the manual** (checklists, blank forms) become low-value chunks that can
    outrank real content. Try dropping chunks with very little prose, or rely on the reranker.
 3. **`ncr_locations.csv`** is numbers (elevation, coordinates). Embeddings handle these poorly and

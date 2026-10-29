@@ -24,6 +24,7 @@ Both steps only **add** data. Rows that already exist are skipped and never chan
 | `scripts/update_open_meteo_datasets.py` | Fetches the missing days from Open-Meteo | the two daily CSV files |
 | `scripts/sync_datasets_to_supabase.py` | Adds the rows Supabase does not have yet | Supabase tables |
 | `scripts/load_to_supabase.py` | One-time full load: empties and reloads the dataset tables, upserts the FAISS chunks | Supabase tables |
+| `scripts/refresh_location_chunks.py` | Re-embeds only the `ncr-locations-*` chunks after `corpus/ncr_locations.csv` changed; writes a new FAISS run | Supabase `chunks`, `faiss_vectors/` |
 
 Run the scripts from `backend/` so the installed packages are found, for example
 `uv run python ../scripts/update_open_meteo_datasets.py`.
@@ -32,7 +33,7 @@ Run the scripts from `backend/` so the installed packages are found, for example
 
 | CSV in `datasets/` | Supabase table | Key | Content |
 |---|---|---|---|
-| `ncr_locations.csv` | `ncr_locations` | `location_id` | 17 sample points: coordinates, elevation, city |
+| `ncr_locations.csv` | `ncr_locations` | `location_id` | One point per NCR city (17): city-centre coordinates, elevation, city |
 | `ncr_weather_daily_2020-2026.csv` | `ncr_weather_daily` | `(location_id, date)` | Daily rain, temperature, wind, radiation, river discharge |
 | `ncr_flood_features_daily.csv` | `ncr_flood_features_daily` | `(location_id, date)` | The same days plus rolling rain, wet streak and discharge features |
 
@@ -43,13 +44,21 @@ so only the backend's direct Postgres connection can read or write them.
 
 `update_open_meteo_datasets.py` works in this order:
 
-1. Reads the points from `ncr_locations.csv`. Locations that share coordinates are requested once (7 distinct coordinates for 17 locations).
+1. Reads the points from `ncr_locations.csv`. Locations that share coordinates are requested once (today each of the 17 cities has its own coordinate).
 2. Finds the first missing day: the day after the oldest "last day" among the locations.
 3. Requests only that range, cut into windows of 14 days. The end date is today minus 2 days by default, because the newest days are still being finalised. Days that come back without rain data are dropped.
 4. Calculates the derived columns, then inserts the new rows into each file at the right place. Old lines keep their exact text; running it twice in a row does nothing.
 5. Writes nothing unless every request succeeded.
 
 Options: `--dry-run` shows the plan and makes no requests, `--end-date YYYY-MM-DD` sets the last day, `--max-calls N` sets the call cap (default 500).
+
+### Rebuilding from scratch
+
+`--rebuild` ignores what is in the two files, fetches every day from 2020-01-01 and replaces both files. Use it after
+`ncr_locations.csv` changed. It uses 90-day windows for weather and 365-day windows for discharge, waits 2 s between calls and
+saves each finished coordinate in a cache folder (the system temp directory, or `--cache-dir`), so a run stopped by a limit
+or a network error continues from the cache when started again. Network timeouts are retried up to 5 times with a growing wait.
+Afterwards run `scripts/load_to_supabase.py` to replace the Supabase tables (it empties and reloads them).
 
 ### Sources
 
@@ -146,17 +155,18 @@ Each history row has `date`, `rain_mm`, `rain_max_1h_mm`, `rain_3d_mm`, `rain_7d
 A city can have several sample points, so rain is averaged and discharge and wet streak take the highest point.
 The result is cached for 30 minutes because the tables change once a day.
 
-`history` is `[]` when the dataset has no point in that city (it covers Quezon City, Las Piñas, Manila, Valenzuela,
-Marikina, Pasig and Taguig) and `None` when Supabase cannot be read. Either way the forecast is still returned, and
+`history` is `[]` when the dataset has no point in that city (it covers all 17 NCR cities; a note such as
+"Pateros (municipality)" is ignored when matching) and `None` when Supabase cannot be read. Either way the forecast is still returned, and
 `weather_agent.py` only adds the "Recent days" lines to the prompt when there are rows. Pass `include_history=False` to skip the read.
 
 ## 8. Known limitations
 
-- **River discharge does not match the old series.** The original data was requested at slightly different points inside each
-  `coord_group`, but `ncr_locations.csv` stores one coordinate per group. Every location in a group now gets the same discharge, so
-  new values can jump compared with the old ones (on 2026-10-25 location 0 went from 2.10 to 1.11 m3/s, location 10 from 0.56 to 10.43).
-  New `discharge_pctile` and `discharge_change_1d_pct` values are unreliable until the original request points are added.
-  Rain, wind and temperature agree with the old values to about 0.1.
+- **Nearby cities can share weather.** Open-Meteo weather comes on a grid of about 0.1 degrees, so close points (for example
+  Las Piñas and Parañaque) get identical rain, wind and temperature. River discharge comes from a finer grid and usually differs.
+- **If `ncr_locations.csv` changes, rebuild.** `location_id` is the key in both daily files and in Supabase, so changing which city
+  an id means (or moving a point) makes the stored rows wrong. Run `update_open_meteo_datasets.py --rebuild`, then
+  `scripts/load_to_supabase.py`. The rebuild is about 600 calls and 20 to 30 minutes; if a limit stops it, run the same command again.
+  The 2026-10 rebuild replaced the earlier 7-coordinate data.
 - **`discharge_pctile` of old rows is never refreshed.** New rows are ranked against the whole history, but earlier rows keep their old rank.
 - **Append only.** If Open-Meteo later revises a day that was already stored, the stored value is not corrected.
 - **Gaps inside the range are not filled.** Only days after the last stored day are requested.

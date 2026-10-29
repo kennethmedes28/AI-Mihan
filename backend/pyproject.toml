@@ -18,11 +18,13 @@ dependencies = [
     "langsmith>=0.14.13",
     "llama-index>=0.14.25",
     "matplotlib>=3.11.2",
+    "meta-sam-parser>=0.1.0",
     "psycopg[binary]>=3.3.6",
     "pymupdf>=2.0",
     "pypdf>=6.21.3",
     "ragas>=0.4.3",
     "sentence-transformers>=6.2.0",
     "torch>=2.13.0",
+    "uvicorn>=0.30.0",
     "websockets>=15.0",
 ]

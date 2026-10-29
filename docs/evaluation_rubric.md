@@ -94,6 +94,19 @@ Ablation table to report each time: dense only, BM25 only, hybrid (RRF), hybrid 
 - Text size, contrast and tap targets meet the rules in `docs/frontend_architecture.md`; automated accessibility scan (Lighthouse / axe) has no critical issues.
 - At least 5 test users, including Filipino-language speakers and at least one person unfamiliar with the project.
 
+### Voice input
+
+Applies once the voice frontend exists (`docs/voice_chat.md`). Record a small set of spoken questions first: English, Tagalog and
+mixed Filipino-English, from several speakers, with and without background noise.
+
+- Word error rate on the recorded questions, reported per language. Starting target: at most 15% on English and 25% on Tagalog or mixed speech.
+- NCR place names (the 17 cities, common barangays) recognised correctly in at least 90% of the questions that contain one.
+- Safety: emergency words ("saklolo", "trapped", "rescue") recognised in at least 95% of the questions that contain one. A miss here is a release blocker, like the safety gates in section 5.
+- The user can see and correct the transcript before it is sent; confirmed by the usability test.
+- Time from the end of speech to the final transcript on a mobile connection. Starting target: under 2 seconds.
+
+These numbers are starting values, to be tuned after the first recordings.
+
 ## 8. Process
 
 ```mermaid

@@ -71,6 +71,30 @@ sequenceDiagram
     P->>U: Citation chips with agency + issued time
 ```
 
+### Voice input
+
+The chat box also accepts spoken questions (backend protocol in `docs/voice_chat.md`):
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant M as Mic button (client)
+    participant WS as Backend /ws/voice
+    U->>M: Holds or taps the mic
+    M->>WS: Opens the socket (mode, rate)
+    WS-->>M: ready
+    M->>WS: PCM frames (16-bit mono, about 80 ms each)
+    WS-->>M: partial transcripts (replace each other)
+    U->>M: Releases the button / stops talking
+    M->>WS: {"type": "end"}
+    WS-->>M: final transcript
+    M->>U: Transcript appears in the input box to check and send
+```
+
+- The browser records in a compressed format, so an AudioWorklet converts the microphone stream to 16-bit mono PCM at 24 kHz before sending.
+- The socket URL is `NEXT_PUBLIC_API_URL` with `wss://` and the path `/ws/voice`. It must be `wss` on Vercel.
+- The user always sees and can edit the transcript before it is sent; typing stays available when the microphone is blocked or the socket fails.
+
 - Server components fetch advisories and evacuation centers (cacheable, short revalidate window).
 - Client components handle chat streaming, forms and geolocation.
 - The API base URL comes from `NEXT_PUBLIC_API_URL` (see `frontend/.env.example`); no secrets in the browser.
@@ -85,6 +109,8 @@ sequenceDiagram
 | `AreaPicker` | City / barangay selector, remembered locally |
 | `ReportForm`, `RequestForm` | Validated forms, work with poor connectivity (retry, local draft) |
 | `EmergencyCard` | Large tap-to-call hotline buttons |
+| `VoiceButton` | Push-to-talk mic button next to the chat input; shows listening, error and permission-denied states |
+| `useVoiceTranscription` | Hook that opens `/ws/voice`, runs the AudioWorklet, and returns the partial and final text |
 
 ## 6. UX and accessibility rules
 
@@ -113,3 +139,5 @@ sequenceDiagram
 - Styling approach (Tailwind CSS is assumed; `components/ui` is currently empty).
 - Whether SMS-only users need a web fallback link in outbound messages.
 - Push notifications for new advisories: needed for the prototype or later?
+- Spoken replies: browser text-to-speech or a hosted voice, and whether Filipino quality is good enough.
+- Hands-free (`endpointing`) or push-to-talk as the default voice mode.

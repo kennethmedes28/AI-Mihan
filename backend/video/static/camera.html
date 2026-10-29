@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flood Camera Check</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; max-width: 720px; margin-inline: auto; }
+  video { width: 100%; background: #111; border-radius: 8px; }
+  button { font-size: 1rem; padding: 10px 18px; margin: 12px 8px 12px 0; }
+  .level { font-size: 1.4rem; font-weight: 600; margin: 8px 0; }
+  .none { color: #1a7f37; } .some { color: #b8860b; } .widespread { color: #c62828; }
+  pre { white-space: pre-wrap; background: #f4f4f4; padding: 12px; border-radius: 8px; }
+  @media (prefers-color-scheme: dark) { body { background: #16181c; color: #e8e8e8; } pre { background: #22252b; } }
+</style>
+</head>
+<body>
+<h1>Flood camera check</h1>
+<p>Checks one frame every few seconds for flood water. Automatic and unverified: it cannot judge water depth. Call 911 if someone is in danger.</p>
+<video id="preview" autoplay playsinline muted></video>
+<div>
+  <button id="start">Start</button><button id="stop" disabled>Stop</button>
+  <label><input type="checkbox" id="people"> also count people and vehicles (3x cost)</label>
+</div>
+<div id="level" class="level">Not running</div>
+<pre id="text"></pre>
+<canvas id="canvas" hidden></canvas>
+<script>
+const FRAME_WIDTH = 640;        // pixels; SAM does not need more
+const JPEG_QUALITY = 0.7;
+const PAUSE_BETWEEN_FRAMES_MS = 3000;
+const video = document.getElementById("preview"), canvas = document.getElementById("canvas");
+const levelBox = document.getElementById("level"), textBox = document.getElementById("text");
+let socket = null, stream = null, timer = null;
+
+function showLevel(report) {
+  const names = { none: "No clear flood water", some: "Some flood water", widespread: "Widespread flood water" };
+  levelBox.className = "level " + report.level;
+  levelBox.textContent = names[report.level] + " (" + Math.round(report.water_coverage * 100) + "% of the picture)";
+}
+
+function sendFrame() {
+  if (!socket || socket.readyState !== WebSocket.OPEN || !video.videoWidth) return;
+  canvas.width = FRAME_WIDTH;
+  canvas.height = Math.round(FRAME_WIDTH * video.videoHeight / video.videoWidth);
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  canvas.toBlob(blob => blob && socket.send(blob), "image/jpeg", JPEG_QUALITY);
+}
+
+document.getElementById("start").onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+  } catch (error) {
+    levelBox.textContent = "Camera not available: " + error.message;
+    return;
+  }
+  video.srcObject = stream;
+  const people = document.getElementById("people").checked ? "?people=1" : "";
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  socket = new WebSocket(scheme + "://" + location.host + "/ws/camera" + people);
+  socket.onopen = () => { levelBox.textContent = "Checking..."; sendFrame(); };
+  socket.onmessage = event => {
+    const message = JSON.parse(event.data);
+    if (message.type === "report") {
+      showLevel(message.report);
+      textBox.textContent = message.text;
+      timer = setTimeout(sendFrame, PAUSE_BETWEEN_FRAMES_MS);   // the next frame waits for this answer
+    } else if (message.type === "error" || message.type === "skipped") {
+      textBox.textContent = message.message || "Too fast, waiting";
+      timer = setTimeout(sendFrame, PAUSE_BETWEEN_FRAMES_MS);
+    }
+  };
+  socket.onclose = () => { levelBox.textContent = "Stopped"; };
+  document.getElementById("start").disabled = true;
+  document.getElementById("stop").disabled = false;
+};
+
+document.getElementById("stop").onclick = () => {
+  clearTimeout(timer);
+  if (socket) socket.close();
+  if (stream) stream.getTracks().forEach(track => track.stop());
+  document.getElementById("start").disabled = false;
+  document.getElementById("stop").disabled = true;
+};
+</script>
+</body>
+</html>

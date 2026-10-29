@@ -10,6 +10,7 @@ PDF reading needs ``pypdf``. Scanned pages are read with the ``tesseract`` progr
 
 import csv
 import logging
+import re
 import subprocess
 import tempfile
 from collections import defaultdict
@@ -152,7 +153,7 @@ def load_ncr_locations_csv(path: str | Path) -> list[Document]:
 
     with open(path, newline="", encoding="utf-8-sig") as file:
         for row in csv.DictReader(file):
-            city = row["city"].strip()
+            city = re.sub(r"\s*\(.*\)$", "", row["city"].strip())  # "Pateros (municipality)" -> "Pateros"
             line = (
                 f"{city} location {row['location_id']}: elevation {float(row['elevation_m']):g} m, "
                 f"latitude {row['latitude']}, longitude {row['longitude']}"
