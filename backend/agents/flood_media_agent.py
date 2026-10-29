@@ -21,6 +21,7 @@ import logging
 import os
 
 from agents.flood_types import AgentReply, ChatContext
+from video.flood_depth import BAND_ANKLE, BAND_CHEST, BAND_KNEE, BAND_NONE, BAND_WAIST
 from video.flood_scene import LEVEL_NONE, LEVEL_SOME, FloodSceneReport, analyze_flood_media
 from video.sam_client import ImageInput, SamError, VideoInput
 from utils.tracing import traced_agent
@@ -38,24 +39,36 @@ FAILED_ANSWER = (
     "If someone is in danger, call 911."
 )
 SAFETY_TEXT = (
-    "This is an automatic check of the picture or video only. It cannot show how deep the water is or whether a road is "
-    "passable, and the picture may be old. Do not walk or drive through flood water. If someone is in danger, call 911.\n"
-    "Awtomatikong pagsusuri lang ito ng larawan o video. Hindi nito matutukoy ang lalim ng baha o kung madadaanan ang kalsada, "
-    "at maaaring luma ang larawan. Huwag lumusong o magmaneho sa baha. Kung may nasa panganib, tumawag sa 911."
+    "This is an automatic check of the picture or video only. It cannot tell whether a road is passable, any depth shown "
+    "is only a rough guess, and the picture may be old. Do not walk or drive through flood water. If someone is in danger, call 911.\n"
+    "Awtomatikong pagsusuri lang ito ng larawan o video. Hindi nito matutukoy kung madadaanan ang kalsada, hula lang ang anumang "
+    "lalim na ipinapakita, at maaaring luma ang larawan. Huwag lumusong o magmaneho sa baha. Kung may nasa panganib, tumawag sa 911."
 )
+
+
+DEPTH_WORDS = {
+    BAND_NONE: ("almost none", "halos wala"),
+    BAND_ANKLE: ("ankle-deep", "hanggang bukung-bukong"),
+    BAND_KNEE: ("about knee-deep", "mga hanggang tuhod"),
+    BAND_WAIST: ("about waist-deep", "mga hanggang baywang"),
+    BAND_CHEST: ("chest-deep or deeper", "hanggang dibdib o mas malalim"),
+}
 
 
 @traced_agent("flood_media_agent")
 def answer_flood_media_question(
-    media: ImageInput | VideoInput, context: ChatContext, api_key: str | None = None
+    media: ImageInput | VideoInput, context: ChatContext, api_key: str | None = None, estimate_depth: bool = False
 ) -> AgentReply:
-    """Analyse a photo or video and describe the flood water in it."""
+    """Analyse a photo or video and describe the flood water in it.
+
+    ``estimate_depth=True`` (photos only) adds a rough depth from the people standing in the water.
+    """
     api_key = api_key or os.getenv("MUSE_API")
     if not api_key:
         return AgentReply(text=NO_KEY_ANSWER)
 
     try:
-        report = analyze_flood_media(media, api_key)
+        report = analyze_flood_media(media, api_key, estimate_depth=estimate_depth)
     except (SamError, OSError, ValueError) as error:  # OSError covers network problems and unreadable files
         logger.error("Flood media check failed: %s", error)
         return AgentReply(text=FAILED_ANSWER)
@@ -87,6 +100,17 @@ def format_report(report: FloodSceneReport, context: ChatContext) -> str:
     if report.media_kind == "video":
         english_lines.append(f"Water was seen in {report.frames_with_water:.0%} of the {report.frames_checked} frames checked.")
         filipino_lines.append(f"Nakita ang baha sa {report.frames_with_water:.0%} ng {report.frames_checked} frame na sinuri.")
+
+    if report.depth_cm is not None:
+        words, words_fil = DEPTH_WORDS[report.depth_band]
+        english_lines.append(
+            f"Rough depth estimate: {words} (about {report.depth_cm:.0f} cm, could be {report.depth_low_cm:.0f} to "
+            f"{report.depth_high_cm:.0f} cm), from {report.depth_people_used} people standing in the water. This is a guess, not a measurement."
+        )
+        filipino_lines.append(
+            f"Tantiyang lalim: {words_fil} (mga {report.depth_cm:.0f} cm, maaaring {report.depth_low_cm:.0f} hanggang "
+            f"{report.depth_high_cm:.0f} cm), batay sa {report.depth_people_used} taong nasa baha. Hula lang ito, hindi sukat."
+        )
 
     place = ""
     if context.location is not None:

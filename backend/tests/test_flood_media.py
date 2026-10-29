@@ -83,7 +83,7 @@ def test_agent_without_key_or_on_failure(monkeypatch):
     monkeypatch.delenv("MUSE_API", raising=False)
     assert "cannot check pictures" in answer_flood_media_question(ImageInput(url="x"), ChatContext()).text
 
-    def broken(media, api_key):
+    def broken(media, api_key, estimate_depth=False):
         raise OSError("network down")
 
     monkeypatch.setattr(flood_media_agent, "analyze_flood_media", broken)

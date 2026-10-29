@@ -77,5 +77,4 @@ Wrong flood guidance can cause harm, and speech recognition makes mistakes, so:
 - The browser side: microphone capture, resampling to 16-bit PCM (an AudioWorklet), the push-to-talk button and transcript display (`docs/frontend_architecture.md`).
 - Spoken replies. Meta's docs reviewed so far only describe speech-to-text; a Filipino voice is unchecked, and the browser's built-in voice is the fallback.
 - An origin check and per-IP rate limit on the socket (planned for `/chat` too).
-- A phone line through Twilio Voice for people without data.
 - Accuracy tests on recorded English, Tagalog and mixed questions (`docs/evaluation_rubric.md`).

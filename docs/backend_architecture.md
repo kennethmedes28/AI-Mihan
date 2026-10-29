@@ -3,25 +3,23 @@
 Design for the Flood-Gentic backend (FastAPI + LangGraph on Railway, data in Supabase).
 Status: **partly built**. Built: the flood agents, the LangGraph chat graph with a Postgres checkpointer, the RAG package
 (chunking, embeddings, FAISS and pgvector stores, retrieval), the realtime voice WebSocket, and the dataset update scripts.
-Not built yet: the FastAPI app itself (`main.py` is still a stub), the HTTP routers, the Twilio webhook and a scheduled
+Not built yet: the FastAPI app itself (`main.py` is still a stub), the HTTP routers and a scheduled
 ingestion worker. Retrieval details live in `docs/ingestion_details.md`, voice in `docs/voice_chat.md`, the weather
 datasets in `docs/dataset_updates.md`; this document covers everything around them.
 
 ## 1. Goals and constraints
 
 - Answer disaster-preparedness questions for Metro Manila (NCR), grounded in verified sources.
-- Accept community reports and supply requests, and notify people by SMS.
+- Accept community reports and supply requests.
 - Prefer "no verified information" over a guess on safety-critical questions.
-- Stack is fixed: Python 3.11+, FastAPI, LangChain / LangGraph, Supabase Postgres (pgvector), Twilio, deployed on Railway.
+- Stack is fixed: Python 3.11+, FastAPI, LangChain / LangGraph, Supabase Postgres (pgvector), deployed on Railway.
 
 ## 2. System context
 
 ```mermaid
 flowchart LR
     U[Resident<br/>web browser] --> FE[Next.js frontend<br/>Vercel]
-    SMS[Resident<br/>SMS] --> TW[Twilio]
     FE -->|HTTPS REST + SSE| API
-    TW -->|webhook| API
     subgraph Railway
         API[FastAPI backend]
         WK[Scheduled ingestion jobs]
@@ -33,7 +31,6 @@ flowchart LR
     API --> LLM[Muse Spark<br/>Meta Model API]
     FE -->|WebSocket audio| API
     API -->|realtime speech-to-text| ASR[Muse voice transcribe]
-    API -->|outbound alerts| TW
 ```
 
 ## 3. Layout
@@ -57,9 +54,9 @@ backend/
   langgraph_orchestrator/ # graph.py (the chat graph), intents.py (keyword routing), service.py (start-up)
   checkpointer/           # Postgres checkpointer (saved conversations) and database settings
   voice/                  # asr_realtime.py, websocket_router.py (docs/voice_chat.md)
-  video/                  # sam_client.py, flood_scene.py, camera_router.py, demo_app.py: SAM 3.1 flood detection (docs/flood_media.md)
+  video/                  # sam_client.py, flood_scene.py, camera_router.py, demo_app.py, depth_model.py, flood_depth.py: SAM 3.1 flood detection and rough depth (docs/flood_media.md)
   prompts/                # system prompts of the weather and document agents
-  utils/                  # TTL cache, hourly model-call budget, distance and text helpers
+  utils/                  # TTL cache, hourly model-call budget, distance and text helpers, LangSmith tracing (tracing.py)
   sql/                    # one-off schema changes (001_reports_geo.sql)
   src/
     rag/                  # ingestion + retrieval (see ingestion_details.md)
@@ -75,8 +72,8 @@ backend/
       reranking.py          cross-encoder rerank
       rules.py              expiry, trust boost, diversity cap, score threshold
       models.py             Chunk and SearchFilter
-    services/             # fetch_postgre_database.py, twilio_services.py (env loading only)
-  tests/                  # agents, graph and voice WebSocket tests
+    services/             # fetch_postgre_database.py
+  tests/                  # agents, graph, voice and camera WebSockets, tracing helpers (conftest.py keeps tests out of LangSmith)
 scripts/                  # ingestion and dataset scripts (docs/dataset_updates.md)
 ```
 
@@ -93,7 +90,6 @@ Keep each module small and single-purpose; routers will contain no business logi
 | POST | `/requests` | Submit a supply / assistance request |
 | GET | `/evacuation-centers` | Search centers by city / barangay |
 | GET | `/advisories/latest` | Current official advisories for an area |
-| POST | `/webhooks/twilio` | Inbound SMS; validates Twilio signature |
 | GET | `/health` | Liveness and dependency check |
 | WS | `/ws/voice` | Live speech-to-text for the chat box. **Built**, see `docs/voice_chat.md` |
 | WS | `/ws/camera` | Webcam flood check, one frame every few seconds. **Built**, see `docs/flood_media.md` |
@@ -232,12 +228,16 @@ Actions workflow (`docs/dataset_updates.md`). Scheduled workers (separate Railwa
 - **Configuration**: all secrets from environment variables (`.env.example` lists names only). Never commit `.env`.
   Current variable names (values live only in `backend/.env`): `MUSE_API` (chat model and speech-to-text), `SUPABASE_PROJECT_REF`,
   `SUPABASE_PASSWORD`, `SUPABASE_POOLER_HOST` (or one `SUPABASE_DB_URL`), `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`,
-  `HF_TOKEN`, `LANGSMITH_KEY`, `GROQ_API_KEY`, `LLAMAINDEX_API_KEY`, and `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`.
+  `HF_TOKEN`, `LANGSMITH_KEY`, `LANGSMITH_TRACE`, `LANGSMITH_PROJECT`, `GROQ_API_KEY`, and `LLAMAINDEX_API_KEY`.
   Optional: `ORS_API_KEY` (routing), `EMBEDDING_MODEL`. The secret key bypasses row-level security, so it must never reach the browser.
 - **Safety**: community reports are stored with a low trust level and never presented as official. Answers about evacuation or warnings must cite an official source or fall back to hotlines.
-- **Security**: validate Twilio signatures on webhooks; rate-limit `/chat` and `/reports` per IP; strip PII (phone numbers) from logs; restrict CORS to the Vercel origin.
-- **Observability**: structured JSON logs, LangSmith tracing for graph runs (already a dependency), request ids on every response.
-- **Resilience**: timeouts and retries on LLM, Open-Meteo and Twilio calls; if the LLM is down, `/chat` returns the hotline fallback and top retrieved advisories rather than an error.
+- **Security**: rate-limit `/chat` and `/reports` per IP; strip PII (phone numbers) from logs; restrict CORS to the Vercel origin.
+- **Observability**: LangSmith tracing is on when `LANGSMITH_TRACE=true` and `LANGSMITH_KEY` are set in `backend/.env` (project `flood-gentic`).
+  Each chat message is one run named `flood-gentic-chat`, tagged `flood-gentic` and carrying the `thread_id`, with the graph nodes, the agents
+  (`utils/tracing.py`, `@traced_agent`) and the model calls nested inside. Every run is cleaned before it is sent: phone-number-like digits
+  are replaced, secrets are hidden and coordinates are rounded to about 1 km. Details in `docs/deployment_workflow_guide.md`.
+  Still to add: structured JSON logs and request ids on every response.
+- **Resilience**: timeouts and retries on LLM and Open-Meteo calls; if the LLM is down, `/chat` returns the hotline fallback and top retrieved advisories rather than an error.
 - **Testing**: `backend/tests/` holds 39 tests (flood agents, the graph with a fake model, the voice WebSocket with a fake transcriber). Still to add: chunkers, RRF and rules, and the evaluation set in `docs/evaluation_rubric.md` for retrieval and answer quality.
 
 ## 9. Deployment
@@ -261,5 +261,5 @@ Environment variables are set per service in Railway / Vercel. Details belong in
 - Which Muse Spark model and reasoning effort to use per agent (see `docs/agent_benchmarks.md`), and a model for query rewrite.
 - Text-to-speech for spoken replies: Meta's voice docs reviewed so far only cover speech-to-text, and a Filipino voice is unchecked.
 - Whether the BM25 index lives in the API process or the worker (affects replica count).
-- Account model: anonymous chat only for the prototype, or phone-number login via Twilio?
+- Account model: anonymous chat only for the prototype.
 - Which government advisories have usable machine-readable feeds versus scraping.

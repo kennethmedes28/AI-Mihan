@@ -16,11 +16,12 @@
 </head>
 <body>
 <h1>Flood camera check</h1>
-<p>Checks one frame every few seconds for flood water. Automatic and unverified: it cannot judge water depth. Call 911 if someone is in danger.</p>
+<p>Checks one frame every few seconds for flood water. Automatic and unverified. A depth shown is only a rough guess from people in the water, not a measurement, and it never means a road is safe. Call 911 if someone is in danger.</p>
 <video id="preview" autoplay playsinline muted></video>
 <div>
   <button id="start">Start</button><button id="stop" disabled>Stop</button>
   <label><input type="checkbox" id="people"> also count people and vehicles (3x cost)</label>
+  <label><input type="checkbox" id="depth"> rough depth from people in the water (slower)</label>
 </div>
 <div id="level" class="level">Not running</div>
 <pre id="text"></pre>
@@ -36,7 +37,8 @@ let socket = null, stream = null, timer = null;
 function showLevel(report) {
   const names = { none: "No clear flood water", some: "Some flood water", widespread: "Widespread flood water" };
   levelBox.className = "level " + report.level;
-  levelBox.textContent = names[report.level] + " (" + Math.round(report.water_coverage * 100) + "% of the picture)";
+  levelBox.textContent = names[report.level] + " (" + Math.round(report.water_coverage * 100) + "% of the picture)"
+    + (report.depth_cm !== null ? " - rough depth about " + Math.round(report.depth_cm) + " cm" : "");
 }
 
 function sendFrame() {
@@ -55,7 +57,10 @@ document.getElementById("start").onclick = async () => {
     return;
   }
   video.srcObject = stream;
-  const people = document.getElementById("people").checked ? "?people=1" : "";
+  const options = [];
+  if (document.getElementById("people").checked) options.push("people=1");
+  if (document.getElementById("depth").checked) options.push("depth=1");
+  const people = options.length ? "?" + options.join("&") : "";
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   socket = new WebSocket(scheme + "://" + location.host + "/ws/camera" + people);
   socket.onopen = () => { levelBox.textContent = "Checking..."; sendFrame(); };

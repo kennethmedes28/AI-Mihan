@@ -5,7 +5,8 @@ seconds. The browser grabs the frame from the webcam (``getUserMedia``), shrinks
 JPEG; the server waits for each answer before the browser sends the next one.
 
 Connect to ``/ws/camera`` (add ``?people=1`` to also count people and vehicles; that is 3 SAM
-requests per frame instead of 1).
+requests per frame instead of 1; add ``?depth=1`` to also estimate the water depth from people in the
+water, which needs the depth model and implies ``people``).
 
 Browser -> server:  binary JPEG frames (at most about 1 MB each; 640 pixels wide is plenty)
 Server -> browser (JSON):
@@ -46,7 +47,7 @@ def create_camera_router(analyze: Analyzer = analyze_flood_media_async) -> APIRo
     router = APIRouter()
 
     @router.websocket("/ws/camera")
-    async def camera_socket(websocket: WebSocket, people: bool = False) -> None:
+    async def camera_socket(websocket: WebSocket, people: bool = False, depth: bool = False) -> None:
         await websocket.accept()
         api_key = os.getenv("MUSE_API")
         if not api_key:
@@ -74,7 +75,7 @@ def create_camera_router(analyze: Analyzer = analyze_flood_media_async) -> APIRo
 
                     last_check_started = time.monotonic()
                     await websocket.send_json({"type": "checking"})
-                    await check_frame(websocket, analyze, frame, api_key, people)
+                    await check_frame(websocket, analyze, frame, api_key, people, depth)
         except TimeoutError:
             await send_error_and_close(websocket, "Session time limit reached")
         except WebSocketDisconnect:
@@ -83,10 +84,14 @@ def create_camera_router(analyze: Analyzer = analyze_flood_media_async) -> APIRo
     return router
 
 
-async def check_frame(websocket: WebSocket, analyze: Analyzer, frame: bytes, api_key: str, people: bool) -> None:
+async def check_frame(
+    websocket: WebSocket, analyze: Analyzer, frame: bytes, api_key: str, people: bool, depth: bool = False
+) -> None:
     """Analyse one frame and send the result. A failed frame is reported; the session goes on."""
     try:
-        report = await analyze(ImageInput(data=frame), api_key, include_people_and_vehicles=people)
+        report = await analyze(
+            ImageInput(data=frame), api_key, include_people_and_vehicles=people, estimate_depth=depth
+        )
     except (SamError, OSError, ValueError) as error:
         logger.error("Webcam frame check failed: %s", error)
         await websocket.send_json({"type": "error", "message": "Could not check this frame"})

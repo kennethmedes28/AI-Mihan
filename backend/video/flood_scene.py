@@ -76,6 +76,13 @@ class FloodSceneReport:
     vehicles: int
     vehicles_in_water: int
     notes: list[str] = field(default_factory=list)  # things a reader should know about this result
+    # Rough water depth, only when asked for (photos only; see flood_depth.py). All None when not estimated.
+    depth_cm: float | None = None
+    depth_low_cm: float | None = None
+    depth_high_cm: float | None = None
+    depth_band: str | None = None
+    depth_confidence: str | None = None
+    depth_people_used: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -178,7 +185,7 @@ def build_report(
     vehicles: list[Detection],
 ) -> FloodSceneReport:
     """Combine the detections of the three concepts into one report."""
-    notes = ["Automatic check of the picture only: water depth and road safety cannot be judged from it."]
+    notes = ["Automatic check of the picture only: road safety cannot be judged from it, and any water depth is a rough guess."]
     frames = sorted({d.frame for d in water + people + vehicles})
     if frame_size is None:  # SAM found nothing at all, so there is nothing to measure
         return FloodSceneReport(media_kind, 1, 0.0, 0.0, 0.0, LEVEL_NONE, 0, 0, 0, 0,
@@ -229,13 +236,21 @@ def build_report(
 
 
 async def analyze_flood_media_async(
-    media: ImageInput | VideoInput, api_key: str, include_people_and_vehicles: bool = True
+    media: ImageInput | VideoInput,
+    api_key: str,
+    include_people_and_vehicles: bool = True,
+    estimate_depth: bool = False,
 ) -> FloodSceneReport:
     """Ask SAM for water, people and vehicles (in parallel) and summarise what it found.
 
     With ``include_people_and_vehicles=False`` only the water is looked for: one SAM request
     instead of three, which is what a repeating webcam check uses to keep the cost down.
+
+    ``estimate_depth=True`` (photos only) also runs the depth model and adds a rough water depth
+    to the report. It needs people in the picture, so it always looks for them.
     """
+    estimate_depth = estimate_depth and isinstance(media, ImageInput)
+    include_people_and_vehicles = include_people_and_vehicles or estimate_depth
     media_kind = "video" if isinstance(media, VideoInput) else "image"
     async with SamClient(api_key) as sam:
         if isinstance(media, VideoInput) and media.path and not media.file_id:
@@ -246,22 +261,53 @@ async def analyze_flood_media_async(
     sizes = [size for size in (frame_size_from_output(r.raw_output) for r in results) if size]
     detections = [to_detections(result) for result in results]
     water, people, vehicles = detections + [[]] * (3 - len(detections))
-    return build_report(media_kind, sizes[0] if sizes else None, water, people, vehicles)
+    report = build_report(media_kind, sizes[0] if sizes else None, water, people, vehicles)
+    if estimate_depth and sizes:
+        await add_depth_estimate(report, media, water, people, sizes[0])
+    return report
 
 
-def analyze_flood_media(media: ImageInput | VideoInput, api_key: str) -> FloodSceneReport:
+async def add_depth_estimate(
+    report: FloodSceneReport, media: ImageInput, water: list[Detection], people: list[Detection], frame_size: tuple[int, int]
+) -> None:
+    """Fill in the report's depth fields. A failure only adds a note; the rest of the report stays."""
+    # Imported here: flood_depth needs this module's helpers, and the depth model is heavy to load.
+    from video.depth_model import get_depth_estimator
+    from video.flood_depth import estimate_flood_depth, exif_focal_mm_35
+
+    if report.level == LEVEL_NONE:
+        return
+    try:
+        image_bytes = await asyncio.to_thread(media.read_bytes)
+        depth_map = await asyncio.to_thread(get_depth_estimator().estimate, image_bytes)  # blocking model work
+        estimate = estimate_flood_depth(people, water, depth_map, frame_size, exif_focal_mm_35(image_bytes))
+    except Exception as error:  # download, model or memory problems must not lose the detection result
+        report.notes.append(f"Depth could not be estimated ({type(error).__name__}).")
+        return
+
+    if estimate is None:
+        report.notes.append("Depth was not estimated: no person was clear enough standing in the water.")
+        return
+    report.depth_cm, report.depth_low_cm, report.depth_high_cm = estimate.depth_cm, estimate.low_cm, estimate.high_cm
+    report.depth_band, report.depth_confidence, report.depth_people_used = estimate.band, estimate.confidence, estimate.people_used
+    report.notes.extend(estimate.notes)
+
+
+def analyze_flood_media(
+    media: ImageInput | VideoInput, api_key: str, estimate_depth: bool = False
+) -> FloodSceneReport:
     """Blocking version of ``analyze_flood_media_async`` for the (synchronous) agents."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(analyze_flood_media_async(media, api_key))
+        return asyncio.run(analyze_flood_media_async(media, api_key, estimate_depth=estimate_depth))
 
     # Already inside an event loop (for example an async server): run in a helper thread instead.
     outcome = {}
 
     def work() -> None:
         try:
-            outcome["report"] = asyncio.run(analyze_flood_media_async(media, api_key))
+            outcome["report"] = asyncio.run(analyze_flood_media_async(media, api_key, estimate_depth=estimate_depth))
         except BaseException as error:  # handed back to the caller below
             outcome["error"] = error
 

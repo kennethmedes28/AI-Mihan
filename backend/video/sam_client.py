@@ -46,6 +46,19 @@ class ImageInput:
     data: bytes | None = None
     mime_type: str = "image/jpeg"  # only used with ``data``
 
+    def read_bytes(self) -> bytes:
+        """The picture's bytes, whichever way it was given (a URL is downloaded)."""
+        given = [value for value in (self.url, self.path, self.data) if value is not None]
+        if len(given) != 1:
+            raise ValueError("Give exactly one of url, path or data.")
+        if self.data is not None:
+            return self.data
+        if self.path is not None:
+            return Path(self.path).read_bytes()
+        response = httpx.get(self.url, timeout=30.0, follow_redirects=True)
+        response.raise_for_status()
+        return response.content
+
     def image_url(self) -> str:
         """The value SAM expects: the public URL, or the file as a base64 data URL."""
         given = [value for value in (self.url, self.path, self.data) if value is not None]

@@ -62,16 +62,39 @@ SAM works on pictures and clips, not on a live stream, so the webcam check is ne
 - **Tested:** the WebSocket with the real SAM API (a frame in, a "widespread" report out) and with fake analysers in `tests/test_camera_websocket.py`. The browser page and a real webcam have **not** been tried.
 - **Cost:** the pause is measured from the start of the previous check, so a check that takes longer than 3 seconds is followed straight away by the next frame. Left running, this is one SAM request (or three) every few seconds; use it for a minute or two, not all day.
 
-## 6. Safety rules
+## 6. Rough water depth (optional)
 
-- The result is unverified evidence. It never overrides PAGASA or NDRRMC information, and it never says a road is safe or gives a water depth.
-- Every reply says it is an automatic check, that the picture may be old, and to call 911 if someone is in danger.
+SAM cannot measure depth: it outlines things and has no sense of distance or real size. A depth estimate needs two more pieces, so it is optional (`estimate_depth=True`, photos only):
+
+1. **A depth model** (`video/depth_model.py`): Depth Anything V2 Metric Outdoor (small), a transformer from Hugging Face, guesses the distance in metres of every pixel of ONE picture. About 100 MB, downloaded on first use; runs on the GPU if there is one, otherwise the CPU. Choose another metric model with `DEPTH_MODEL`.
+2. **People as a ruler** (`video/flood_depth.py`): an adult is about 1.7 m tall. For each clearly visible person standing in the water, `visible height = pixel height x distance / focal length in pixels`, and `depth = 1.7 m - visible height`. The report uses the middle value over all such people.
+
+The focal length comes from the photo's EXIF data when present, otherwise a typical phone camera (26 mm in 35 mm terms) is assumed and a note says so.
+
+| Report field | Meaning |
+|---|---|
+| `depth_cm`, `depth_low_cm`, `depth_high_cm` | Middle estimate and a plausible range (allows for body heights of 1.5 to 1.8 m and a 25% error in the model's distances) |
+| `depth_band` | `none` (under 5 cm), `ankle` (5 to 15), `knee` (15 to 50), `waist` (50 to 100), `chest_or_deeper` |
+| `depth_confidence` | `low`, or `medium` only when the photo states its zoom and at least five people agree closely. Never `high` |
+| `depth_people_used` | How many people the estimate is based on |
+
+People are used only if they are at least 20 pixels tall, standing-shaped, not cut off by the picture's edge, in the water, and between 1 and 60 m from the camera. With no such person the report has no depth and a note says why.
+
+**How far to trust it.** On the Quezon City test photo it gave about 52 cm (range 3 to 92 cm, "waist", low confidence) from 7 people; the Muse Spark vision model independently said "waist, 50 to 100 cm, low confidence" for the same photo. That agreement is one picture judged by eye. There are no photos with measured depths to test against, so the accuracy is unknown. The depth model's distances are rough (for a person about 1.5 m away it said 8 m, so close-up people are unreliable) and the range is wide on purpose. Do not use the number to decide whether a road can be crossed. Needs only that one extra model pass: about 1.5 s on the GPU after a 20 s first load.
+
+Turning it on: `analyze_flood_media(media, api_key, estimate_depth=True)`, `answer_flood_media_question(..., estimate_depth=True)`, or `?depth=1` on `/ws/camera` (the demo page has a checkbox).
+
+## 7. Safety rules
+
+- The result is unverified evidence. It never overrides PAGASA or NDRRMC information, and it never says a road is safe. A depth, when asked for, is shown as a guess with its range.
+- Every reply says it is an automatic check, that the picture may be old, that any depth is only a guess, and to call 911 if someone is in danger.
 - A place given by the user is repeated as "not confirmed from the picture". The picture does not set the user's location.
 
-## 7. Not built yet
+## 8. Not built yet
 
 - Sending a photo or video through the chat: the graph state carries text only, so the agent has no entry point from a chat message yet (an upload endpoint and a `media` intent are needed).
 - Saving a result as a community report (`reports` table) with the picture's evidence.
 - Using the water coverage as an input to the flood risk agent or to the flooded areas that routes avoid.
 - A check of what the user uploads (size, type, content) and a per-user limit, since every check costs SAM requests.
 - Tuning the thresholds and measuring accuracy on a labelled set of Philippine flood photos (`docs/evaluation_rubric.md`).
+- Depth accuracy: photos with a measured depth (a gauge or marked pole in view) to compare against; using the dry people in a scene to calibrate the scale; vehicles and fixed objects as extra rulers; depth for videos (only photos today).

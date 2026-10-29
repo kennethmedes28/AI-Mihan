@@ -23,7 +23,7 @@ def test_frame_in_report_out(monkeypatch):
     monkeypatch.setenv("MUSE_API", "key")
     seen = {}
 
-    async def analyze(media, api_key, include_people_and_vehicles):
+    async def analyze(media, api_key, include_people_and_vehicles, estimate_depth=False):
         seen["bytes"], seen["people"] = media.data, include_people_and_vehicles
         return fake_report()
 
@@ -39,7 +39,7 @@ def test_frame_in_report_out(monkeypatch):
 def test_frames_that_come_too_soon_are_skipped(monkeypatch):
     monkeypatch.setenv("MUSE_API", "key")
 
-    async def analyze(media, api_key, include_people_and_vehicles):
+    async def analyze(media, api_key, include_people_and_vehicles, estimate_depth=False):
         return fake_report()
 
     with make_client(analyze).websocket_connect("/ws/camera") as socket:
@@ -52,7 +52,7 @@ def test_frames_that_come_too_soon_are_skipped(monkeypatch):
 def test_a_failed_frame_does_not_close_the_session(monkeypatch):
     monkeypatch.setenv("MUSE_API", "key")
 
-    async def analyze(media, api_key, include_people_and_vehicles):
+    async def analyze(media, api_key, include_people_and_vehicles, estimate_depth=False):
         raise SamError("boom")
 
     with make_client(analyze).websocket_connect("/ws/camera") as socket:
@@ -65,7 +65,7 @@ def test_oversized_frame_and_missing_key(monkeypatch):
     monkeypatch.setenv("MUSE_API", "key")
     monkeypatch.setattr(camera_router, "MAX_FRAME_BYTES", 5)
 
-    async def analyze(media, api_key, include_people_and_vehicles):
+    async def analyze(media, api_key, include_people_and_vehicles, estimate_depth=False):
         return fake_report()
 
     with make_client(analyze).websocket_connect("/ws/camera") as socket:
