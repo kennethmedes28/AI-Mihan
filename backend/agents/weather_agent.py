@@ -18,6 +18,7 @@ Example:
     answer = answer_weather_question("Uulan ba bukas sa Makati?", ChatOpenAI())
 """
 
+import contextvars
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -30,6 +31,7 @@ from prompts.weather_prompt import WEATHER_PROMPT
 from utils.call_budget import BUSY_ANSWER, model_budget
 from utils.text import normalize_question
 from utils.ttl_cache import MISSING, TTLCache
+from utils.tracing import traced_agent
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +71,9 @@ def fetch_both_sources(question: str) -> tuple[list[dict] | None, dict | None]:
     returned as ``None`` (and logged) so the other can still be used.
     """
     with ThreadPoolExecutor(max_workers=2) as executor:
-        pagasa_future = executor.submit(fetch_weather_pages, question)
-        open_meteo_future = executor.submit(fetch_open_meteo, question)
+        # copy_context() carries the LangSmith run into the worker threads, so both fetches show up under this agent.
+        pagasa_future = executor.submit(contextvars.copy_context().run, fetch_weather_pages, question)
+        open_meteo_future = executor.submit(contextvars.copy_context().run, fetch_open_meteo, question)
 
         return _result_or_none(pagasa_future, "PAGASA"), _result_or_none(
             open_meteo_future, "Open-Meteo"
@@ -196,6 +199,7 @@ def format_history(history: list[dict] | None) -> list[str]:
 # --- The agent -----------------------------------------------------------------
 
 
+@traced_agent("weather_agent")
 def answer_weather_question(question: str, llm: BaseChatModel) -> str:
     """Answer a weather question using PAGASA and Open-Meteo data.
 

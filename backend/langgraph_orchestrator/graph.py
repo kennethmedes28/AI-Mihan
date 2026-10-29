@@ -227,7 +227,13 @@ async def ask(graph, question: str, thread_id: str, location: dict | None = None
     Messages with the same ``thread_id`` belong to the same conversation.
     ``location`` is an optional GPS fix from the app: ``{"lat": 14.65, "lng": 121.10}``.
     """
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        # LangSmith: a readable name, a filter tag, and the conversation id to group the runs of one chat.
+        "run_name": "flood-gentic-chat",
+        "tags": ["flood-gentic"],
+        "metadata": {"thread_id": thread_id, "has_gps": location is not None},
+    }
     graph_input: dict = {"messages": [("user", question)]}
     if location:
         graph_input["location"] = location_from_coordinates(location["lat"], location["lng"]).to_dict()

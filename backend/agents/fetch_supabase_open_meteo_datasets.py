@@ -30,6 +30,7 @@ import logging
 import httpx
 
 from src.services.fetch_postgre_database import get_connection
+from utils.tracing import traced_agent
 from utils.ttl_cache import ttl_cache
 
 logger = logging.getLogger(__name__)
@@ -210,6 +211,7 @@ def build_plan(question: str) -> dict:
     }
 
 
+@traced_agent("open_meteo_fetch", run_type="tool")
 def fetch_open_meteo(
     question: str, client: httpx.Client | None = None, include_history: bool = True
 ) -> dict:

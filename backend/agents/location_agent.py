@@ -31,6 +31,7 @@ from agents.flood_types import (
 )
 from utils.geo import haversine_m
 from utils.ttl_cache import ttl_cache
+from utils.tracing import traced_agent
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +183,7 @@ def describe_precision(location: Location) -> str:
     )
 
 
+@traced_agent("location_agent")
 def answer_location_message(question: str, context: ChatContext) -> AgentReply:
     """Handle a message that only gives a place, such as "Marikina", or asks to set the location."""
     location = resolve_location(question)

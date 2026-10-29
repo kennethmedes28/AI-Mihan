@@ -29,6 +29,7 @@ import httpx
 from bs4 import BeautifulSoup
 from langchain_community.document_loaders import AsyncChromiumLoader
 
+from utils.tracing import traced_agent
 from utils.ttl_cache import ttl_cache
 
 logger = logging.getLogger(__name__)
@@ -134,6 +135,7 @@ def load_clean_page(url: str, use_browser: bool = False) -> tuple[str, str]:
     return clean_html(load_html(url, use_browser=use_browser))
 
 
+@traced_agent("pagasa_fetch", run_type="tool")
 def fetch_weather_pages(question: str, use_browser: bool = False) -> list[dict]:
     """Fetch and clean the PAGASA pages that match the question.
 

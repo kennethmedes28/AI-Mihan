@@ -13,6 +13,7 @@ import logging
 from agents.flood_types import PRECISION_CITY, AgentReply, ChatContext
 from agents.location_agent import ASK_FOR_LOCATION, resolve_location
 from src.services.fetch_postgre_database import insert_report
+from utils.tracing import traced_agent
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ NO_DATABASE_ANSWER = (
 )
 
 
+@traced_agent("report_agent")
 def answer_report_request(question: str, context: ChatContext) -> AgentReply:
     """Save the user's flood report using the place in the message or their saved location."""
     place = resolve_location(question) or context.location

@@ -23,6 +23,7 @@ import os
 from agents.flood_types import AgentReply, ChatContext
 from video.flood_scene import LEVEL_NONE, LEVEL_SOME, FloodSceneReport, analyze_flood_media
 from video.sam_client import ImageInput, SamError, VideoInput
+from utils.tracing import traced_agent
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ SAFETY_TEXT = (
 )
 
 
+@traced_agent("flood_media_agent")
 def answer_flood_media_question(
     media: ImageInput | VideoInput, context: ChatContext, api_key: str | None = None
 ) -> AgentReply:

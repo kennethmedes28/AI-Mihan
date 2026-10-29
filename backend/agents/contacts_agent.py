@@ -11,6 +11,7 @@ from pathlib import Path
 
 from agents.flood_types import AgentReply, ChatContext
 from agents.location_agent import ASK_FOR_LOCATION, plain_text, find_city
+from utils.tracing import traced_agent
 
 DEFAULT_CONTACTS = Path(__file__).resolve().parents[2] / "corpus" / "ph_emergency_contacts.csv"
 
@@ -59,6 +60,7 @@ def format_contacts(city: str | None, contacts: list[dict] | None = None) -> str
     return "\n".join(lines)
 
 
+@traced_agent("contacts_agent")
 def answer_contacts_question(question: str, context: ChatContext) -> AgentReply:
     """List the hotlines for the city in the question or the user's saved city."""
     city = find_city(question) or (context.location.city if context.location else None)

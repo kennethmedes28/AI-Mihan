@@ -38,6 +38,7 @@ from src.rag.rules import apply_rules
 from utils.call_budget import BUSY_ANSWER, model_budget
 from utils.text import normalize_question
 from utils.ttl_cache import MISSING, TTLCache
+from utils.tracing import traced_agent
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,7 @@ def format_sources(chunks: list[Chunk]) -> str:
     return "\n\n".join(lines)
 
 
+@traced_agent("document_agent")
 def answer_document_question(
     question: str,
     llm: BaseChatModel,

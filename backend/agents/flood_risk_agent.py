@@ -42,6 +42,7 @@ from agents.flood_types import (
 from agents.location_agent import ASK_FOR_LOCATION, find_city
 from src.rag.models import PHILIPPINE_TZ
 from utils.ttl_cache import ttl_cache
+from utils.tracing import traced_agent
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +297,7 @@ def format_risk(risk: FloodRisk) -> str:
     return "\n".join(lines)
 
 
+@traced_agent("flood_risk_agent")
 def answer_flood_risk_question(question: str, context: ChatContext) -> AgentReply:
     """Answer "will it flood?" for the city in the question, or the user's saved city."""
     city = find_city(question) or (context.location.city if context.location else None)

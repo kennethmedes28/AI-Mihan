@@ -30,6 +30,7 @@ from agents.flood_zones import collect_zones
 from agents.location_agent import ASK_FOR_LOCATION, resolve_location
 from src.rag.models import PHILIPPINE_TZ
 from utils.geo import bearing_name, circle_polygon, haversine_m, point_to_segment_m
+from utils.tracing import traced_agent
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,7 @@ def format_route(route: Route, destination: Location, zones: list[FloodZone], pr
     return "\n".join(lines)
 
 
+@traced_agent("route_agent")
 def answer_route_question(question: str, context: ChatContext) -> AgentReply:
     """Answer "how do I get there?" with a route that avoids known flooded areas."""
     origin_text, destination_text = parse_trip(question)

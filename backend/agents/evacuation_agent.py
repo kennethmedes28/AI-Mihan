@@ -18,6 +18,7 @@ from agents.flood_zones import collect_zones
 from agents.location_agent import ASK_FOR_LOCATION, describe_precision, nearest_city, resolve_location
 from src.services.fetch_postgre_database import fetch_evacuation_centers
 from utils.geo import bearing_name, haversine_m
+from utils.tracing import traced_agent
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ def nearest_safe_center(origin: Location, context: ChatContext, zones: list[Floo
     return centers[0] if centers else None
 
 
+@traced_agent("evacuation_agent")
 def answer_evacuation_question(question: str, context: ChatContext) -> AgentReply:
     """List the nearest safe evacuation centers for the user's location."""
     origin = resolve_location(question) or context.location
