@@ -80,9 +80,26 @@ CREATE TABLE IF NOT EXISTS ncr_flood_features_daily (
     PRIMARY KEY (location_id, date)
 );
 
+-- Evacuation centers. location_id is the city's id in ncr_locations (the same for every center of a city),
+-- so a center is identified by its city, barangay and name instead.
+CREATE TABLE IF NOT EXISTS evacuation_centers (
+    location_id       integer NOT NULL,
+    city              text    NOT NULL,
+    barangay          text    NOT NULL,
+    name              text    NOT NULL,
+    type              text,
+    status_in_source  text,
+    source            text,
+    latitude          double precision NOT NULL,
+    longitude         double precision NOT NULL,
+    notes             text,
+    UNIQUE (city, barangay, name)
+);
+
 ALTER TABLE ncr_locations            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ncr_weather_daily        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ncr_flood_features_daily ENABLE ROW LEVEL SECURITY;
+ALTER TABLE evacuation_centers        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chunks                   ENABLE ROW LEVEL SECURITY;
 """
 
@@ -91,6 +108,7 @@ DATASET_TABLES = [
     ("ncr_locations", "ncr_locations.csv"),
     ("ncr_weather_daily", "ncr_weather_daily_2020-2026.csv"),
     ("ncr_flood_features_daily", "ncr_flood_features_daily.csv"),
+    ("evacuation_centers", "ncr_evacuation_centers.csv"),
 ]
 
 

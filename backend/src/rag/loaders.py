@@ -91,16 +91,24 @@ def load_directory(directory: str | Path, doc_type: str = "manual", metadata: di
 
 
 def load_evacuation_centers_csv(path: str | Path) -> list[Document]:
-    """Load evacuation centers from a CSV with columns: name, barangay, city, capacity.
+    """Load evacuation centers (columns city, barangay, name, type, status_in_source, source, notes, ...).
 
     One document per city, with one line per center, so each center becomes
-    one chunk and searches can be limited to a city.
+    one chunk and searches can be limited to a city. Each line keeps the status
+    and source from the list, because the lists differ in how current they are
+    (a 2018 inventory, a 2024 report, an earthquake-drill site) and the answer
+    should be able to say so. The trust tier is left unset: the sources are mixed.
     """
     lines_by_city = defaultdict(list)
 
-    with open(path, newline="", encoding="utf-8") as file:
+    with open(path, newline="", encoding="utf-8-sig") as file:
         for row in csv.DictReader(file):
-            line = f"{row['name']}, Barangay {row['barangay']}, {row['city']}, capacity {row['capacity']}"
+            line = (
+                f"{row['name']} ({row['type']}), {row['barangay']}, {row['city']}. "
+                f"Status: {row['status_in_source']}. Source: {row['source']}."
+            )
+            if row["notes"]:
+                line += f" Note: {row['notes']}."
             lines_by_city[row["city"].strip()].append(line)
 
     return [
@@ -108,7 +116,7 @@ def load_evacuation_centers_csv(path: str | Path) -> list[Document]:
             doc_id=f"evacuation-centers-{city.lower().replace(' ', '-')}",
             text="\n".join(lines),
             doc_type="record",
-            metadata={"city": city, "agency": "LGU", "trust_tier": "official", "hazard": None},
+            metadata={"source": Path(path).name, "city": city, "trust_tier": None, "hazard": None},
         )
         for city, lines in lines_by_city.items()
     ]

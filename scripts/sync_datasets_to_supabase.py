@@ -6,7 +6,7 @@ Run from backend/ (or anywhere, with the Supabase settings in the environment):
 
 For each table the CSV rows are copied into a temporary staging table, then
 inserted with ``ON CONFLICT DO NOTHING``. A row whose (location_id, date) is
-already in Supabase is left exactly as it is, and nothing is ever updated or
+already in Supabase is left exactly as it is (for evacuation centers the row is (city, barangay, name)), and nothing is ever updated or
 deleted, so running it twice in a row changes nothing.
 
 Tables (created if missing) and their CSV files:
@@ -14,6 +14,7 @@ Tables (created if missing) and their CSV files:
     ncr_locations              datasets/ncr_locations.csv
     ncr_weather_daily          datasets/ncr_weather_daily_2020-2026.csv
     ncr_flood_features_daily   datasets/ncr_flood_features_daily.csv
+    evacuation_centers         datasets/ncr_evacuation_centers.csv
 
 Connection settings: see backend/.env.example (SUPABASE_DB_URL, or project ref + password + pooler host).
 """
@@ -37,6 +38,7 @@ KEY_COLUMNS = {
     "ncr_locations": "location_id",
     "ncr_weather_daily": "location_id, date",
     "ncr_flood_features_daily": "location_id, date",
+    "evacuation_centers": "city, barangay, name",
 }
 
 

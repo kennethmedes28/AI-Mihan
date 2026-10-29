@@ -70,3 +70,5 @@ class AgentReply:
     location: Location | None = None  # new user location, if one was worked out
     destination: Location | None = None  # new destination, if one was chosen
     pending_intent: str | None = None  # set when the agent asked a question and wants the answer
+    safe_answer: bool = False  # True for the fixed "not confident enough" reply (see safe_answer.py)
+    pending_parts: list | None = None  # topics still waiting for the user's location: [[intent, question], ...]

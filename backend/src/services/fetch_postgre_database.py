@@ -26,17 +26,22 @@ def _build_query(base_sql: str, conditions: list[str], order_by: str, limit: int
 def fetch_evacuation_centers(
     conn, city: str | None = None, barangay: str | None = None, limit: int = 20
 ) -> list[dict]:
-    """Return evacuation centers, optionally limited to a city and / or barangay."""
+    """Return evacuation centers, optionally limited to a city and / or barangay.
+
+    ``city`` is the key the agents use ("paranaque", "quezon city"). The table holds the
+    names as written in the source ("Parañaque City", "Pateros"), so the match ignores
+    accents and the trailing word "City": the key only has to be the start of the name.
+    """
     conditions, values = [], []
     if city:
-        conditions.append("city ILIKE %s")
-        values.append(city)
+        conditions.append("translate(lower(city), 'ñ', 'n') ILIKE %s")
+        values.append(city.lower().replace("ñ", "n") + "%")
     if barangay:
         conditions.append("barangay ILIKE %s")
         values.append(barangay)
 
     sql = _build_query(
-        "SELECT name, city, barangay, capacity, lat, lng FROM evacuation_centers",
+        "SELECT name, city, barangay, type, latitude AS lat, longitude AS lng, notes FROM evacuation_centers",
         conditions,
         order_by="city, barangay, name",
         limit=limit,

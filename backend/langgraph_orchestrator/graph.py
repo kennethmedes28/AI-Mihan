@@ -10,6 +10,8 @@
                                     +--> weather      PAGASA + Open-Meteo
                                     +--> documents    stored flood material (RAG)
                                     +--> flood_media  a photo or video was attached: flood water (and rough depth) in it
+                                    +--> multi        one message with several topics: each topic is answered by its own
+                                    |                 agent (at the same time) and the answers are joined under headings
                                     |
                                     +--> END
 
@@ -21,6 +23,8 @@ remembers, per conversation:
     * ``pending_intent`` set when an agent asked "which city are you in?", so the
                          next message (just "Marikina") goes back to that agent
     * ``media``          a photo or video to check, for ONE message only (see ``media_from_dict``)
+    * ``pending_parts``  the topics of a multi-topic message that are still waiting for the user's
+                         location (the answer to "which city?" completes them)
 
 When a checkpointer is given, the conversation is saved per ``thread_id``
 (see checkpointer/postgres_checkpointer.py).
@@ -33,10 +37,13 @@ Example:
                       media={"kind": "image", "path": "/uploads/street.jpg", "estimate_depth": True})
 """
 
+import contextvars
 import ipaddress
 import logging
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Callable, TypedDict
 from urllib.parse import urlparse
@@ -47,13 +54,20 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
 from agents.contacts_agent import answer_contacts_question, format_contacts
-from agents.document_agents import NO_EVIDENCE_ANSWER, answer_document_question
+from agents.document_agents import answer_document_question
 from agents.evacuation_agent import answer_evacuation_question
 from agents.flood_media_agent import answer_flood_media_question
 from agents.flood_risk_agent import answer_flood_risk_question
 from agents.flood_types import AgentReply, ChatContext, Location
-from agents.location_agent import answer_location_message, location_from_coordinates, mentions_place, resolve_location
+from agents.location_agent import (
+    ASK_FOR_LOCATION,
+    answer_location_message,
+    location_from_coordinates,
+    mentions_place,
+    resolve_location,
+)
 from agents.report_agent import answer_report_request
+from agents.safe_answer import safe_reply
 from agents.route_agent import answer_route_question
 from agents.weather_agent import answer_weather_question
 from langgraph_orchestrator.intents import (
@@ -62,11 +76,13 @@ from langgraph_orchestrator.intents import (
     EVACUATION,
     FLOOD_RISK,
     GENERAL,
+    MULTI,
     PREPAREDNESS,
     REPORT,
     ROUTE,
     WEATHER,
     classify_intent,
+    split_by_intent,
 )
 from src.rag.retriever import HybridRetriever
 from video.sam_client import ImageInput, VideoInput
@@ -84,9 +100,10 @@ WEATHER_NODE = "weather"
 DOCUMENTS_NODE = "documents"
 LOCATION_NODE = "location"
 FLOOD_MEDIA_NODE = "flood_media"
+MULTI_NODE = "multi"
 ALL_NODES = [
     EMERGENCY_NODE, REPORT_NODE, ROUTE_NODE, EVACUATION_NODE,
-    CONTACTS_NODE, FLOOD_RISK_NODE, WEATHER_NODE, DOCUMENTS_NODE, LOCATION_NODE, FLOOD_MEDIA_NODE,
+    CONTACTS_NODE, FLOOD_RISK_NODE, WEATHER_NODE, DOCUMENTS_NODE, LOCATION_NODE, FLOOD_MEDIA_NODE, MULTI_NODE,
 ]
 
 # Which node answers each intent. Preparedness and anything unrecognised go to the documents.
@@ -99,6 +116,20 @@ NODE_FOR_INTENT = {
     FLOOD_RISK: FLOOD_RISK_NODE,
     WEATHER: WEATHER_NODE,
     PREPAREDNESS: DOCUMENTS_NODE,
+    MULTI: MULTI_NODE,  # only reached as a waiting question; new multi-topic messages are detected in route_message
+}
+
+# Topics whose agents need to know where the user is.
+TOPICS_NEEDING_LOCATION = {FLOOD_RISK, EVACUATION, ROUTE, CONTACTS}
+
+# Heading above each topic's answer in a combined reply.
+TOPIC_HEADINGS = {
+    WEATHER: "Weather forecast / Lagay ng panahon",
+    FLOOD_RISK: "Flood risk / Panganib ng baha",
+    PREPAREDNESS: "What to do / Ano ang gagawin",
+    EVACUATION: "Evacuation center",
+    ROUTE: "Route / Ruta",
+    CONTACTS: "Hotlines",
 }
 
 # Fixed reply for emergencies: instant, free, and does not depend on any API.
@@ -178,6 +209,8 @@ class ChatState(TypedDict, total=False):
     destination: dict | None
     pending_intent: str | None
     media: dict | None  # photo or video attached to the newest message; cleared once it has been checked
+    pending_parts: list | None  # topics of a multi-topic message waiting for the user's location
+    safe_answer: bool  # True when the newest reply is the fixed "not confident enough" text; reset by every node
 
 
 def last_question(state: ChatState) -> str:
@@ -192,7 +225,8 @@ def route_message(state: ChatState) -> str:
     2. A message with a photo or video attached goes to the media check.
     3. A message that is only a place ("Marikina") goes back to the agent that
        asked for one, or sets the user's location if none was waiting.
-    4. Anything else goes by its keywords. A message with its own topic is
+    4. A message with two or more topics goes to the multi node, which answers each one.
+    5. Anything else goes by its keywords. A message with its own topic is
        never hijacked by a waiting question: "hotline Pasig" is about hotlines
        even if the evacuation agent was waiting for a city.
     """
@@ -207,6 +241,8 @@ def route_message(state: ChatState) -> str:
     if intent == GENERAL and mentions_place(question):
         pending = state.get("pending_intent")
         return NODE_FOR_INTENT.get(pending, LOCATION_NODE)
+    if split_by_intent(question):
+        return MULTI_NODE
     return NODE_FOR_INTENT.get(intent, DOCUMENTS_NODE)
 
 
@@ -249,7 +285,13 @@ def build_graph(
                 reply = agent(last_question(state), make_context(state))
             except Exception as error:
                 logger.exception("Agent failed: %s", error)
-                return {"messages": [AIMessage(content=ERROR_ANSWER)], "pending_intent": None, "media": None}
+                return {
+                    "messages": [AIMessage(content=ERROR_ANSWER)],
+                    "pending_intent": None,
+                    "media": None,
+                    "pending_parts": None,
+                    "safe_answer": False,
+                }
 
             return state_update(reply)
 
@@ -258,7 +300,13 @@ def build_graph(
     def state_update(reply: AgentReply) -> dict:
         """The state changes for an agent's reply: the message, and anything to remember."""
         # media is cleared by every node, so an attached file is never checked a second time
-        update = {"messages": [AIMessage(content=reply.text)], "pending_intent": reply.pending_intent, "media": None}
+        update = {
+            "messages": [AIMessage(content=reply.text)],
+            "pending_intent": reply.pending_intent,
+            "media": None,
+            "pending_parts": reply.pending_parts,
+            "safe_answer": reply.safe_answer,  # set on every reply so a flag never carries over to the next turn
+        }
         if reply.location:
             update["location"] = reply.location.to_dict()
         if reply.destination:
@@ -280,20 +328,91 @@ def build_graph(
             reply = AgentReply(text=ERROR_ANSWER)
         return {**state_update(reply), "pending_intent": None}
 
-    def text_node(answer_function: Callable[[str], str]) -> Callable[[ChatState], dict]:
-        """Make a node from a function that only returns text (the weather and document agents)."""
-        return agent_node(lambda question, context: AgentReply(text=answer_function(question)))
-
     def emergency(question: str, context: ChatContext) -> AgentReply:
         """The fixed emergency text, plus local numbers when the city is known."""
         place = resolve_location(question) or context.location
         text = EMERGENCY_ANSWER + ("\n\n" + format_contacts(place.city) if place else "")
         return AgentReply(text=text, location=place)
 
-    def answer_from_documents(question: str) -> str:
+    def answer_from_documents(question: str, context: ChatContext) -> AgentReply:
         if retriever is None:
-            return NO_EVIDENCE_ANSWER
+            return safe_reply()  # nothing to search, so do not guess
         return answer_document_question(question, llm, retriever)
+
+    def multi_reply(state: ChatState) -> AgentReply:
+        """Answer every topic of a multi-topic message and join the answers under headings.
+
+        The topics run at the same time (the weather and document agents each call the
+        model, so this saves most of the waiting). A topic that needs the user's location
+        while none is known is left waiting: the reply asks "which city?" and keeps the
+        topic in ``pending_parts``, so the next message (just the city) completes it.
+        """
+        question = last_question(state)
+        # A new message is split afresh; a place-only reply finishes the topics left waiting.
+        parts = split_by_intent(question) or [tuple(part) for part in state.get("pending_parts") or []]
+
+        place = resolve_location(question)
+        context = replace(make_context(state), location=place or Location.from_dict(state.get("location")))
+
+        ready = [part for part in parts if context.location or part[0] not in TOPICS_NEEDING_LOCATION]
+        waiting = [part for part in parts if part not in ready]
+
+        def run_part(part: tuple[str, str]) -> AgentReply | None:
+            intent, part_question = part
+            try:
+                return topic_agents[intent](part_question, context)
+            except Exception as error:
+                logger.exception("Agent for %s failed: %s", intent, error)
+                return None
+
+        with ThreadPoolExecutor(max_workers=max(len(ready), 1)) as executor:
+            # copy_context() carries the LangSmith run into the worker threads.
+            futures = [executor.submit(contextvars.copy_context().run, run_part, part) for part in ready]
+            replies = [future.result() for future in futures]
+
+        sections, answered = [], []
+        for (intent, _), reply in zip(ready, replies):
+            if reply is not None:
+                sections.append(f"{TOPIC_HEADINGS[intent]}\n{reply.text}")
+                answered.append(reply)
+        if waiting:
+            names = ", ".join(TOPIC_HEADINGS[intent].split(" / ")[0] for intent, _ in waiting)
+            sections.append(f"For {names}:\n{ASK_FOR_LOCATION}")
+        if not sections:
+            return AgentReply(text=ERROR_ANSWER)
+
+        return AgentReply(
+            text="\n\n".join(sections),
+            location=place or next((reply.location for reply in answered if reply.location), None),
+            destination=next((reply.destination for reply in answered if reply.destination), None),
+            pending_intent=MULTI if waiting else None,
+            pending_parts=[list(part) for part in waiting] or None,
+            safe_answer=any(reply.safe_answer for reply in answered),
+        )
+
+    def multi_node(state: ChatState) -> dict:
+        """The node for a message with several topics. An unexpected error becomes the polite fixed reply."""
+        try:
+            reply = multi_reply(state)
+        except Exception as error:
+            logger.exception("Multi-topic answer failed: %s", error)
+            reply = AgentReply(text=ERROR_ANSWER)
+        return state_update(reply)
+
+    def weather_with_city(question: str, context: ChatContext) -> AgentReply:
+        """The weather agent reads the city from the question, so add the user's known city to it."""
+        city = context.location.city if context.location else None
+        return answer_weather_question(f"{question} ({city})" if city else question, llm)
+
+    # Which agent answers each topic of a multi-topic message.
+    topic_agents = {
+        WEATHER: weather_with_city,
+        FLOOD_RISK: answer_flood_risk_question,
+        PREPAREDNESS: answer_from_documents,
+        EVACUATION: answer_evacuation_question,
+        ROUTE: answer_route_question,
+        CONTACTS: answer_contacts_question,
+    }
 
     graph = StateGraph(ChatState)
     graph.add_node(EMERGENCY_NODE, agent_node(emergency))
@@ -303,9 +422,10 @@ def build_graph(
     graph.add_node(CONTACTS_NODE, agent_node(answer_contacts_question))
     graph.add_node(FLOOD_RISK_NODE, agent_node(answer_flood_risk_question))
     graph.add_node(LOCATION_NODE, agent_node(answer_location_message))
-    graph.add_node(WEATHER_NODE, text_node(lambda question: answer_weather_question(question, llm)))
-    graph.add_node(DOCUMENTS_NODE, text_node(answer_from_documents))
+    graph.add_node(WEATHER_NODE, agent_node(lambda question, context: answer_weather_question(question, llm)))
+    graph.add_node(DOCUMENTS_NODE, agent_node(answer_from_documents))
     graph.add_node(FLOOD_MEDIA_NODE, flood_media_node)
+    graph.add_node(MULTI_NODE, multi_node)
 
     graph.add_conditional_edges(START, route_message, ALL_NODES)
     for node_name in ALL_NODES:
@@ -314,10 +434,28 @@ def build_graph(
     return graph.compile(checkpointer=checkpointer)
 
 
+@dataclass
+class ChatReply:
+    """The assistant's reply, and whether it is the fixed safe answer (the agents were not confident enough)."""
+
+    text: str
+    safe_answer: bool = False
+
+
 async def ask(
     graph, question: str, thread_id: str, location: dict | None = None, media: dict | None = None
 ) -> str:
-    """Send one user message through the graph and return the assistant's reply.
+    """Send one user message through the graph and return the assistant's reply text.
+
+    Use ``ask_reply`` instead to also learn whether the reply is the flagged safe answer.
+    """
+    return (await ask_reply(graph, question, thread_id, location, media)).text
+
+
+async def ask_reply(
+    graph, question: str, thread_id: str, location: dict | None = None, media: dict | None = None
+) -> ChatReply:
+    """Send one user message through the graph and return the reply with its safe-answer flag.
 
     Messages with the same ``thread_id`` belong to the same conversation.
     ``location`` is an optional GPS fix from the app: ``{"lat": 14.65, "lng": 121.10}``.
@@ -340,4 +478,4 @@ async def ask(
     if location:
         graph_input["location"] = location_from_coordinates(location["lat"], location["lng"]).to_dict()
     result = await graph.ainvoke(graph_input, config)
-    return result["messages"][-1].content
+    return ChatReply(text=result["messages"][-1].content, safe_answer=bool(result.get("safe_answer")))

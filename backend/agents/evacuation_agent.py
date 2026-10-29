@@ -115,8 +115,9 @@ def answer_evacuation_question(question: str, context: ChatContext) -> AgentRepl
     for number, center in enumerate(centers[:CENTERS_SHOWN], start=1):
         direction = bearing_name(origin.lat, origin.lng, center["lat"], center["lng"])
         capacity = f", capacity {center['capacity']}" if center.get("capacity") else ""
+        kind = f", {center['type'].lower()}" if center.get("type") else ""
         lines.append(
-            f"{number}. {center['name']} ({center.get('barangay') or center.get('city')}) - "
+            f"{number}. {center['name']} ({center.get('barangay') or center.get('city')}{kind}) - "
             f"{center['distance_m'] / 1000:.1f} km {direction}{capacity}"
         )
     if flooded_count:
@@ -126,9 +127,9 @@ def answer_evacuation_question(question: str, context: ChatContext) -> AgentRepl
     if origin.precision == PRECISION_CITY:
         lines.append(describe_precision(origin))
     lines.append(
-        "Distances are in a straight line. Confirm with your barangay that the center is open.\n"
+        "Distances are in a straight line and map positions are approximate. Confirm with your barangay that the center is open.\n"
         "Say \"how do I get there?\" for a route that avoids flooded areas.\n"
-        "Diretsong linya ang layo. Kumpirmahin sa barangay kung bukas ang center. "
+        "Diretsong linya ang layo at tinatayang posisyon lamang. Kumpirmahin sa barangay kung bukas ang center. "
         "Sabihin ang \"paano pumunta\" para sa ruta na umiiwas sa baha."
     )
     return AgentReply(

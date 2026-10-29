@@ -40,6 +40,7 @@ from agents.flood_types import (
     ChatContext,
 )
 from agents.location_agent import ASK_FOR_LOCATION, find_city
+from agents.web_lookup_agent import search_trusted_sites
 from src.rag.models import PHILIPPINE_TZ
 from utils.ttl_cache import ttl_cache
 from utils.tracing import traced_agent
@@ -297,6 +298,24 @@ def format_risk(risk: FloodRisk) -> str:
     return "\n".join(lines)
 
 
+def format_web_updates(city: str) -> str:
+    """Links to recent official pages about the city, for when the PAGASA bulletin could not be read.
+
+    Their text is NOT used to set the risk level: a web search can return an old
+    article, and an old "red warning" must not raise a false alarm. The user gets
+    the links to read for themselves.
+    """
+    try:
+        pages = search_trusted_sites(f"flood rainfall warning {city}")
+    except Exception as error:  # Never let the fallback break the rule-based answer.
+        logger.warning("Web lookup failed: %s", error)
+        return ""
+    if not pages:
+        return ""
+    lines = [f"- {page['title'] or page['source']}: {page['source']}" for page in pages[:3]]
+    return "\n\nFrom a web search of official sites (not used in the level above):\n" + "\n".join(lines)
+
+
 @traced_agent("flood_risk_agent")
 def answer_flood_risk_question(question: str, context: ChatContext) -> AgentReply:
     """Answer "will it flood?" for the city in the question, or the user's saved city."""
@@ -316,4 +335,7 @@ def answer_flood_risk_question(question: str, context: ChatContext) -> AgentRepl
     risk = assess_flood_risk(city, pagasa_text, now=context.now)
     if not pagasa_text:
         risk.missing.append("PAGASA bulletin")
-    return AgentReply(text=format_risk(risk))
+    text = format_risk(risk)
+    if not pagasa_text:
+        text += format_web_updates(city)
+    return AgentReply(text=text)

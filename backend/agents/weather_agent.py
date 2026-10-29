@@ -27,6 +27,9 @@ from langchain_core.output_parsers import StrOutputParser
 
 from agents.fetch_supabase_open_meteo_datasets import fetch_open_meteo
 from agents.fetch_weather_using_browser import fetch_weather_pages
+from agents.flood_types import AgentReply
+from agents.safe_answer import safe_reply
+from agents.web_lookup_agent import WEB_NOTE, search_trusted_sites
 from prompts.weather_prompt import WEATHER_PROMPT
 from utils.call_budget import BUSY_ANSWER, model_budget
 from utils.text import normalize_question
@@ -37,14 +40,6 @@ logger = logging.getLogger(__name__)
 
 PAGASA_UNAVAILABLE = "PAGASA data is unavailable right now."
 OPEN_METEO_UNAVAILABLE = "Open-Meteo data is unavailable right now."
-
-# Fixed reply used when both sources are down (no model call, so no cost).
-NO_DATA_ANSWER = (
-    "I have no verified weather information right now. "
-    "Check pagasa.dost.gov.ph or your local DRRMO.\n"
-    "Wala akong na-verify na datos ng panahon ngayon. "
-    "Tingnan ang pagasa.dost.gov.ph o makipag-ugnayan sa inyong lokal na DRRMO."
-)
 
 ANSWER_CACHE_SECONDS = 30 * 60  # demo setting
 # Answers to repeated questions, kept briefly to avoid repeat model calls.
@@ -200,31 +195,39 @@ def format_history(history: list[dict] | None) -> list[str]:
 
 
 @traced_agent("weather_agent")
-def answer_weather_question(question: str, llm: BaseChatModel) -> str:
+def answer_weather_question(question: str, llm: BaseChatModel) -> AgentReply:
     """Answer a weather question using PAGASA and Open-Meteo data.
 
     Cost savers:
         * The same question (ignoring case and punctuation) is answered from
           cache for a few minutes instead of calling the model again.
         * Source downloads are cached too (see the fetch modules).
-        * If both sources are down, a fixed reply is returned and the model is
-          not called. It is never cached, so the next request tries again.
+        * If every source is down (including the web fallback), the flagged safe
+          answer is returned and the model is not called. It is never cached, so the next request tries again.
         * The PAGASA text is shortened to the lines that matter.
     """
     cache_key = normalize_question(question)
     cached_answer = answer_cache.get(cache_key)
     if cached_answer is not MISSING:
-        return cached_answer
+        return AgentReply(text=cached_answer)
 
     pagasa_pages, open_meteo_result = fetch_both_sources(question)
-    if pagasa_pages is None and open_meteo_result is None:
-        return NO_DATA_ANSWER
+
+    # No PAGASA text means no official source, which is low confidence: look on the trusted websites.
+    used_web = False
+    if not pagasa_pages:
+        logger.info("No PAGASA pages; searching trusted websites.")
+        pagasa_pages = search_trusted_sites(question)
+        used_web = bool(pagasa_pages)
+
+    if not pagasa_pages and open_meteo_result is None:
+        return safe_reply()  # no source at all: never let the model guess the weather
 
     # The detected city is used to keep PAGASA lines that mention it.
     city = open_meteo_result["plan"]["city"] if open_meteo_result else None
 
     if not model_budget.try_use():  # hourly cap on model calls (see utils/call_budget.py)
-        return BUSY_ANSWER
+        return AgentReply(text=BUSY_ANSWER)
 
     chain = WEATHER_PROMPT | llm | StrOutputParser()
     answer = chain.invoke(
@@ -234,8 +237,10 @@ def answer_weather_question(question: str, llm: BaseChatModel) -> str:
             "open_meteo_data": format_open_meteo(open_meteo_result),
         }
     )
+    if used_web:
+        answer = f"{answer}\n\n{WEB_NOTE}"
     answer_cache.set(cache_key, answer)
-    return answer
+    return AgentReply(text=answer)
 
 
 if __name__ == "__main__":

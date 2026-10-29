@@ -8,7 +8,9 @@ Flow, cheapest steps first:
 
     question -> cached answer?  -> done
              -> hybrid search (vector + BM25) -> rerank -> rules
-             -> nothing trustworthy found?  -> fixed reply (no model call)
+             -> only weak matches, or none? -> search trusted websites in a browser (web_lookup_agent.py)
+             -> websites have nothing, or the matches are almost unrelated? -> the safe answer
+                (fixed safety text, flagged; no model call, so nothing can be invented)
              -> over the hourly model budget? -> busy reply (no model call)
              -> model answers from the numbered sources, with citations
 
@@ -30,6 +32,9 @@ from dataclasses import replace
 from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 
+from agents.flood_types import AgentReply
+from agents.safe_answer import safe_reply
+from agents.web_lookup_agent import answer_from_web
 from prompts.document_prompt import DOCUMENT_PROMPT
 from src.rag.models import Chunk, SearchFilter
 from src.rag.reranking import rerank
@@ -48,13 +53,12 @@ RERANK_TOP_N = 8  # candidates kept after reranking
 SOURCES_FOR_MODEL = 4  # chunks sent to the model; fewer means fewer tokens billed
 ANSWER_CACHE_SECONDS = 30 * 60  # demo setting
 
-# Fixed reply when nothing trustworthy was found (no model call, so no cost).
-NO_EVIDENCE_ANSWER = (
-    "I have no verified flood information about that. "
-    "Check pagasa.dost.gov.ph, ndrrmc.gov.ph or your local DRRMO.\n"
-    "Wala akong na-verify na impormasyon tungkol sa baha na ito. "
-    "Tingnan ang pagasa.dost.gov.ph, ndrrmc.gov.ph o ang inyong lokal na DRRMO."
-)
+# Best rerank score (after the trust boost). A starting point: tune both values on the evaluation set.
+#   at or above LOW_CONFIDENCE_SCORE   the documents answer
+#   from VERY_LOW to LOW (or no match) the trusted websites are searched instead
+#   below VERY_LOW_CONFIDENCE_SCORE    the matches are noise: no model and no web text, only the safe answer
+LOW_CONFIDENCE_SCORE = 0.3
+VERY_LOW_CONFIDENCE_SCORE = 0.1
 
 # Fixed reply when the chat model itself fails (not cached, so the next try can succeed).
 MODEL_ERROR_ANSWER = (
@@ -103,6 +107,19 @@ def find_sources(
     return apply_rules(reranked, min_score=min_score, top_n=SOURCES_FOR_MODEL)
 
 
+def is_low_confidence(sources: list[Chunk]) -> bool:
+    """True when there are no sources, or even the best one is a weak match."""
+    return not sources or max(chunk.score for chunk in sources) < LOW_CONFIDENCE_SCORE
+
+
+def is_very_low_confidence(sources: list[Chunk]) -> bool:
+    """True when sources were found but even the best one is almost unrelated to the question.
+
+    No sources at all is not "very low": nothing was found, so the websites are still worth a try.
+    """
+    return bool(sources) and max(chunk.score for chunk in sources) < VERY_LOW_CONFIDENCE_SCORE
+
+
 def format_sources(chunks: list[Chunk]) -> str:
     """Write the chunks as numbered sources for the prompt.
 
@@ -132,34 +149,48 @@ def answer_document_question(
     retriever: HybridRetriever,
     search_filter: SearchFilter | None = None,
     min_score: float | None = None,
-) -> str:
-    """Answer a flood question from the stored documents, with numbered citations."""
+) -> AgentReply:
+    """Answer a flood question from the stored documents, with numbered citations.
+
+    When the evidence is too weak the reply is the fixed safe answer (``safe_answer=True``),
+    never a model guess.
+    """
     # The same question can have different answers per city, so the city is part of the key.
     city = search_filter.city if search_filter else None
     cache_key = (normalize_question(question), (city or "").lower())
     cached_answer = answer_cache.get(cache_key)
     if cached_answer is not MISSING:
-        return cached_answer
+        return AgentReply(text=cached_answer)
 
     try:
         sources = find_sources(question, retriever, search_filter, min_score)
     except Exception as error:  # Database down, model not installed, and so on.
         logger.error("Document search failed: %s", error)
-        return NO_EVIDENCE_ANSWER
+        sources = []
 
-    if not sources:
-        return NO_EVIDENCE_ANSWER
+    if is_very_low_confidence(sources):
+        logger.info("Very low document confidence; giving the safe answer.")
+        return safe_reply()
+
+    if is_low_confidence(sources):
+        # The stored documents do not clearly answer this: ask the trusted websites instead.
+        logger.info("Low document confidence; searching trusted websites.")
+        web_answer = answer_from_web(question, llm)
+        if web_answer:
+            answer_cache.set(cache_key, web_answer)
+            return AgentReply(text=web_answer)
+        return safe_reply()
 
     if not model_budget.try_use():  # hourly cap on model calls (see utils/call_budget.py)
-        return BUSY_ANSWER
+        return AgentReply(text=BUSY_ANSWER)
 
     chain = DOCUMENT_PROMPT | llm | StrOutputParser()
     try:
         answer = chain.invoke({"question": question, "sources": format_sources(sources)})
     except Exception as error:  # Provider outage, rate limit, and so on.
         logger.error("Document answer failed: %s", error)
-        return MODEL_ERROR_ANSWER
+        return AgentReply(text=MODEL_ERROR_ANSWER)
 
     if answer.strip():
         answer_cache.set(cache_key, answer)
-    return answer
+    return AgentReply(text=answer)

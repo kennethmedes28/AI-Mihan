@@ -36,6 +36,7 @@ Run the scripts from `backend/` so the installed packages are found, for example
 | `ncr_locations.csv` | `ncr_locations` | `location_id` | One point per NCR city (17): city-centre coordinates, elevation, city |
 | `ncr_weather_daily_2020-2026.csv` | `ncr_weather_daily` | `(location_id, date)` | Daily rain, temperature, wind, radiation, river discharge |
 | `ncr_flood_features_daily.csv` | `ncr_flood_features_daily` | `(location_id, date)` | The same days plus rolling rain, wet streak and discharge features |
+| `ncr_evacuation_centers.csv` | `evacuation_centers` | `(city, barangay, name)` | 102 evacuation centers with type, status and source. Coordinates are approximate. Read by the evacuation agent; a copy in `corpus/` is also embedded as `evacuation-centers-<city>` chunks (`scripts/refresh_location_chunks.py`) |
 
 Both daily files are sorted by `location_id`, then `date`. Row-level security is on for every table with no policies,
 so only the backend's direct Postgres connection can read or write them.
