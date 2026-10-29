@@ -1,6 +1,6 @@
 # Frontend Architecture
 
-Design for the CAI-Lamity web app (Next.js on Vercel).
+Design for the Flood-Gentic web app (Next.js on Vercel).
 Status: **proposed**. Today `frontend/` has Next 16 / React 19 in `package.json`, a `public/page.tsx`
 and an empty `components/ui` folder. The app is not scaffolded yet, so this document also fixes the target structure.
 

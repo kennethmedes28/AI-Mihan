@@ -1,6 +1,6 @@
 # Ingestion and Retrieval Details
 
-How CAI-Lamity chunks, indexes, retrieves, and reranks disaster information.
+How Flood-Gentic chunks, indexes, retrieves, and reranks disaster information.
 Every number in this document (chunk sizes, `k` values, thresholds) is a **starting value**
 to be tuned against the evaluation golden set described in section 8.
 

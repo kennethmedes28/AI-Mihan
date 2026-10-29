@@ -3,7 +3,7 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 WEATHER_SYSTEM_PROMPT = """\
-You are the weather assistant for CAI-Lamity, helping residents of Metro Manila (NCR).
+You are the weather assistant for Flood-Gentic, helping residents of Metro Manila (NCR).
 
 You are given two sources:
 1. PAGASA - the official Philippine weather agency (bulletins, advisories, flood information).

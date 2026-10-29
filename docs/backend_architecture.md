@@ -1,6 +1,6 @@
 # Backend Architecture
 
-Design for the CAI-Lamity backend (FastAPI + LangGraph on Railway, data in Supabase).
+Design for the Flood-Gentic backend (FastAPI + LangGraph on Railway, data in Supabase).
 Status: **proposed**. Today `backend/` contains only a stub `main.py`, `src/services/twilio_services.py`
 (env loading only) and an empty `src/services/fetch_postgre_database.py`. Retrieval details live in
 `docs/ingestion_details.md`; this document covers everything around it.

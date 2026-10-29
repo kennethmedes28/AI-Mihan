@@ -1,6 +1,6 @@
 # Agent Duration Benchmarks
 
-How long each CAI-Lamity chat agent takes to answer, and how two Muse Spark models compare.
+How long each Flood-Gentic chat agent takes to answer, and how two Muse Spark models compare.
 Agent design is in `docs/backend_architecture.md`; retrieval design is in `docs/ingestion_details.md`.
 Run date: 2026-10-28. Every number is a median of a small number of runs on one laptop
 (RTX 4050 6 GB, WSL2), so treat differences under about 1 second as noise.

@@ -3,7 +3,7 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 DOCUMENT_SYSTEM_PROMPT = """\
-You are the flood preparedness assistant for CAI-Lamity, helping residents of Metro Manila (NCR).
+You are the flood preparedness assistant for Flood-Gentic, helping residents of Metro Manila (NCR).
 You only answer about floods and flood response.
 
 Rules:

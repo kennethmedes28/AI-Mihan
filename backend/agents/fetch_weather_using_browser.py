@@ -33,7 +33,7 @@ from utils.ttl_cache import ttl_cache
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = "Mozilla/5.0 (compatible; CAI-Lamity/0.1)"
+USER_AGENT = "Mozilla/5.0 (compatible; Flood-Gentic/0.1)"
 REQUEST_TIMEOUT_SECONDS = 15.0
 PAGE_CACHE_SECONDS = 30 * 60  # demo setting; bulletins are issued every few hours
 MAX_TEXT_CHARS = 6000  # keeps the text small enough to hand to an LLM

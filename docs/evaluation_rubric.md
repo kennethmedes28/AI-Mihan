@@ -1,6 +1,6 @@
 # Evaluation Rubric
 
-How CAI-Lamity is judged before and after release. Retrieval design is in `docs/ingestion_details.md`;
+How Flood-Gentic is judged before and after release. Retrieval design is in `docs/ingestion_details.md`;
 system design is in `docs/backend_architecture.md`. Because wrong disaster guidance can cause harm,
 **safety criteria are gates**: failing one blocks release regardless of other scores.
 All thresholds below are initial targets, to be revised once a baseline exists.

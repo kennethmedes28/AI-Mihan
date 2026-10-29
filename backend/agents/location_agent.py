@@ -35,7 +35,7 @@ from utils.ttl_cache import ttl_cache
 logger = logging.getLogger(__name__)
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-USER_AGENT = "CAI-Lamity-flood-assistant/0.1"  # Nominatim requires an identifying agent
+USER_AGENT = "Flood-Gentic-flood-assistant/0.1"  # Nominatim requires an identifying agent
 GEOCODE_CACHE_SECONDS = 24 * 60 * 60
 REQUEST_TIMEOUT_SECONDS = 8.0
 
