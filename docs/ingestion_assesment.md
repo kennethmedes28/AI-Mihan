@@ -89,7 +89,8 @@ Spot checks on the saved index:
 
 ## 6. Known issues and next steps
 
-1. **Supabase write not done.** Needs `SUPABASE_DB_URL` in `backend/.env`; then run the ingest
+1. **Supabase write not done.** Connection is ready (`SUPABASE_PROJECT_REF`, `SUPABASE_PASSWORD`, `SUPABASE_POOLER_HOST` in `backend/.env`,
+   or `SUPABASE_DB_URL`) but the database has no `vector` extension or `chunks` table yet; then run the ingest
    script with `--supabase`. Until then retrieval only exists as FAISS files.
 2. **Table-like pages in the manual** (checklists, blank forms) become low-value chunks that can
    outrank real content. Try dropping chunks with very little prose, or rely on the reranker.

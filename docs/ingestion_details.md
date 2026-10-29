@@ -170,7 +170,8 @@ faiss_vectors/<YYYYmmdd-HHMMSS>_<model name>/
 ```
 
 Code: `backend/src/rag/faiss_store.py` (`save_run`, `load_run`). Supabase is written only with
-`--supabase` and needs `SUPABASE_DB_URL`.
+`--supabase` and needs a Supabase connection in `backend/.env`: `SUPABASE_DB_URL`, or
+`SUPABASE_PROJECT_REF` + `SUPABASE_PASSWORD` + `SUPABASE_POOLER_HOST` (see `backend/.env.example`).
 
 ### Sparse retriever (BM25)
 - Real BM25, not Postgres `ts_rank`, which has no inverse-document-frequency saturation.

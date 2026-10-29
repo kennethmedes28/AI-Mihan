@@ -6,6 +6,7 @@ Reads the Supabase Postgres connection details from environment variables
 
 import os
 from dataclasses import dataclass
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from psycopg.rows import dict_row
@@ -40,23 +41,38 @@ class CheckpointerDBConfig:
         }
 
 
+def build_connection_url() -> str:
+    """Return the Postgres connection string.
+
+    Uses SUPABASE_DB_URL when it is set. Otherwise builds the transaction pooler
+    URL from SUPABASE_PROJECT_REF, SUPABASE_PASSWORD and SUPABASE_POOLER_HOST
+    (Supabase dashboard > Connect > Transaction pooler).
+    """
+    connection_url = os.getenv("SUPABASE_DB_URL")
+    if connection_url:
+        return connection_url
+
+    project_ref = os.getenv("SUPABASE_PROJECT_REF")
+    password = os.getenv("SUPABASE_PASSWORD")
+    pooler_host = os.getenv("SUPABASE_POOLER_HOST")
+    if not (project_ref and password and pooler_host):
+        raise RuntimeError(
+            "Set SUPABASE_DB_URL, or all of SUPABASE_PROJECT_REF, SUPABASE_PASSWORD "
+            "and SUPABASE_POOLER_HOST in backend/.env (see .env.example)."
+        )
+
+    # The password is URL-encoded so characters like @ or / do not break the URL.
+    return f"postgresql://postgres.{project_ref}:{quote(password, safe='')}@{pooler_host}:6543/postgres"
+
+
 def load_db_config() -> CheckpointerDBConfig:
     """Build the config from environment variables.
 
-    Required:
-        SUPABASE_DB_URL: Postgres connection string.
-    Optional:
-        CHECKPOINTER_POOL_MIN / CHECKPOINTER_POOL_MAX: pool size limits.
+    Required: SUPABASE_DB_URL, or SUPABASE_PROJECT_REF + SUPABASE_PASSWORD + SUPABASE_POOLER_HOST.
+    Optional: CHECKPOINTER_POOL_MIN / CHECKPOINTER_POOL_MAX: pool size limits.
     """
-    connection_url = os.getenv("SUPABASE_DB_URL")
-    if not connection_url:
-        raise RuntimeError(
-            "SUPABASE_DB_URL is not set. Add it to backend/.env "
-            "(see .env.example)."
-        )
-
     return CheckpointerDBConfig(
-        connection_url=connection_url,
+        connection_url=build_connection_url(),
         min_pool_size=int(os.getenv("CHECKPOINTER_POOL_MIN", "1")),
         max_pool_size=int(os.getenv("CHECKPOINTER_POOL_MAX", "5")),
     )

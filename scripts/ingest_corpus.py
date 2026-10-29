@@ -8,7 +8,8 @@ Run from the backend folder so imports and .env are found:
     uv run python ../scripts/ingest_corpus.py --supabase    # also write the chunks to Supabase
 
 Each FAISS run goes into its own timestamped folder, so earlier runs are kept.
-The Supabase step needs SUPABASE_DB_URL in backend/.env.
+The Supabase step needs SUPABASE_DB_URL, or SUPABASE_PROJECT_REF + SUPABASE_PASSWORD +
+SUPABASE_POOLER_HOST, in backend/.env (see backend/.env.example).
 """
 
 import argparse
@@ -21,7 +22,7 @@ REPO_DIR = Path(__file__).resolve().parent.parent
 CORPUS_DIR = REPO_DIR / "corpus"
 FAISS_DIR = REPO_DIR / "faiss_vectors"
 
-load_dotenv()  # picks up backend/.env, HF_TOKEN and SUPABASE_DB_URL
+load_dotenv()  # picks up backend/.env, HF_TOKEN and the Supabase settings
 
 
 def load_corpus_documents():

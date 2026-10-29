@@ -1,0 +1,56 @@
+name: Update datasets
+
+# Every day at 00:00 Philippine time (UTC+8, no daylight saving) = 16:00 UTC the day before.
+# GitHub can start scheduled runs a few minutes late.
+on:
+  schedule:
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+# The last step pushes the updated CSV files back to the repository.
+permissions:
+  contents: write
+
+# Never run two updates at the same time.
+concurrency:
+  group: update-datasets
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pandas httpx "psycopg[binary]" python-dotenv
+
+      # Adds the missing days to the CSV files in datasets/ (skips days that exist).
+      - name: Fetch new days from Open-Meteo
+        run: python scripts/update_open_meteo_datasets.py
+
+      # Adds only the rows Supabase does not have yet. Never updates or deletes.
+      - name: Append new rows to Supabase
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_PASSWORD: ${{ secrets.SUPABASE_PASSWORD }}
+          SUPABASE_POOLER_HOST: ${{ secrets.SUPABASE_POOLER_HOST }}
+        run: python scripts/sync_datasets_to_supabase.py
+
+      # Keeps the repository copy current, so the next run only asks for the newest days.
+      - name: Commit updated CSV files
+        run: |
+          if git diff --quiet -- datasets; then
+            echo "No new data."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add datasets/ncr_weather_daily_2020-2026.csv datasets/ncr_flood_features_daily.csv
+          git commit -m "Update daily weather datasets"
+          git push
