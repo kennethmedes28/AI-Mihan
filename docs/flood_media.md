@@ -84,15 +84,25 @@ People are used only if they are at least 20 pixels tall, standing-shaped, not c
 
 Turning it on: `analyze_flood_media(media, api_key, estimate_depth=True)`, `answer_flood_media_question(..., estimate_depth=True)`, or `?depth=1` on `/ws/camera` (the demo page has a checkbox).
 
-## 7. Safety rules
+## 7. In the chat graph
+
+`ask(graph, question, thread_id, media={...})` in `langgraph_orchestrator/graph.py` sends a photo or video with a message. The `media` dictionary is
+`{"kind": "image" or "video", "url": "https://..." or "path": "...", "estimate_depth": True/False}`:
+
+- A message with media goes to the `flood_media` node (an emergency message still wins and gets the fixed emergency reply). An empty question is replaced by a default one.
+- Only one of `url` or `path`. A URL must be `https` and public (localhost, private and link-local addresses are refused). A path must be a file inside the upload folder (`MEDIA_UPLOAD_DIR`, default `<temp dir>/flood_gentic_uploads`). Anything else gets a polite "I could not use that file" reply.
+- The state keeps only this small reference, and every node clears it, so the file is checked once and is not repeated on the next message.
+- Tested end to end through the graph: a photo saved in the upload folder gave the water, people and depth text; a path outside the folder was refused.
+
+## 8. Safety rules
 
 - The result is unverified evidence. It never overrides PAGASA or NDRRMC information, and it never says a road is safe. A depth, when asked for, is shown as a guess with its range.
 - Every reply says it is an automatic check, that the picture may be old, that any depth is only a guess, and to call 911 if someone is in danger.
 - A place given by the user is repeated as "not confirmed from the picture". The picture does not set the user's location.
 
-## 8. Not built yet
+## 9. Not built yet
 
-- Sending a photo or video through the chat: the graph state carries text only, so the agent has no entry point from a chat message yet (an upload endpoint and a `media` intent are needed).
+- The upload endpoint: the chat graph now takes a photo or video (below), but nothing saves a user's upload yet. The endpoint must check the file's size and type, save it into the upload folder, and set the `media` dictionary itself, never from what the user typed.
 - Saving a result as a community report (`reports` table) with the picture's evidence.
 - Using the water coverage as an input to the flood risk agent or to the flooded areas that routes avoid.
 - A check of what the user uploads (size, type, content) and a per-user limit, since every check costs SAM requests.

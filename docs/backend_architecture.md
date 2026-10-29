@@ -102,8 +102,9 @@ Request and response bodies are Pydantic models. Every chat response includes `s
 ## 5. Chat flow (LangGraph)
 
 Each message is routed by keywords (`langgraph_orchestrator/intents.py`), so routing costs nothing and is the same every time.
-An emergency always wins; then the specific flood services; then preparedness, flood risk and weather. Anything
-unrecognised goes to the document agent, which answers from stored material or says it has no information.
+An emergency always wins; then a message with a photo or video attached goes to the media check; then the specific flood
+services; then preparedness, flood risk and weather. Anything unrecognised goes to the document agent, which answers from stored
+material or says it has no information.
 
 ```mermaid
 flowchart LR
@@ -115,6 +116,7 @@ flowchart LR
     K -->|contacts| C[contacts agent]
     K -->|place name only| L[location agent]
     K -->|flood risk| FR[flood risk agent]
+    K -->|photo or video attached| M[flood media agent<br/>SAM 3.1 + optional depth]
     K -->|weather| W[weather agent<br/>PAGASA + Open-Meteo]
     K -->|preparedness / general| D[document agent<br/>hybrid retrieval + answer]
     E --> O([respond])
@@ -126,13 +128,16 @@ flowchart LR
     FR --> O
     W --> O
     D --> O
+    M --> O
 ```
 
-Only the weather and document agents call the chat model; the others use fixed rules or copy data exactly (a wrong
+Only the weather and document agents call the chat model (the media agent calls SAM 3.1, and optionally a depth model, instead); the others use fixed rules or copy data exactly (a wrong
 phone number or route can cost a life). An hourly cap on model calls (`utils/call_budget.py`) returns a busy reply when it is used up.
 
 The graph remembers, per conversation (saved by the Postgres checkpointer under a `thread_id`): the user's `location`,
-the last suggested `destination` (for "how do I get there?"), and a `pending_intent` when an agent asked "which city are you in?".
+the last suggested `destination` (for "how do I get there?"), and a `pending_intent` when an agent asked "which city are you in?". A `media`
+reference (kind plus an https `url` or a `path` inside `MEDIA_UPLOAD_DIR`, and an optional `estimate_depth`) is kept for one message only and cleared by
+every node, so a file is checked once and the saved conversation never holds the file itself.
 Emergency intent short-circuits everything else so urgent contacts are never delayed by search or model latency.
 
 ## 6. Data model (Supabase)
