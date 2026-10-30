@@ -28,7 +28,14 @@ MULTI = "multi"  # a message with several topics; see split_by_intent
 INTENT_KEYWORDS = [
     (
         EMERGENCY,
-        ["emergency", "trapped", "stranded", "rescue", "saklolo", "nakulong", "naiipit", "nalulunod", "drowning"],
+        [
+            "emergency", "trapped", "stranded", "rescue", "saklolo", "nakulong", "naiipit", "nalulunod", "drowning",
+            # Water deep enough to knock a person over (waist or higher), or people already on a roof.
+            # Knee-deep ("hanggang tuhod") is not here: that user still needs to be told where to go.
+            "hanggang baywang", "hanggang bewang", "hanggang dibdib", "hanggang leeg",
+            "waist deep", "waist-deep", "chest deep", "chest-deep", "neck deep", "neck-deep",
+            "nasa bubong", "sa bubong", "rooftop",
+        ],
     ),
     (
         REPORT,

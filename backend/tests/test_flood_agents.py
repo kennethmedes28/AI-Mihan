@@ -61,6 +61,9 @@ class IntentTests(unittest.TestCase):
             "Babaha ba sa Pasig bukas?": FLOOD_RISK,
             "Uulan ba bukas?": WEATHER,
             "tulong, nalulunod kami": EMERGENCY,
+            "baha hanggang baywang na dito sa Pasig": EMERGENCY,
+            "water is chest-deep, where is the evacuation center": EMERGENCY,
+            "baha hanggang tuhod, saan ang evacuation center": EVACUATION,  # knee-deep still gets the centers
         }
         for message, expected in cases.items():
             self.assertEqual(classify_intent(message), expected, message)
@@ -88,6 +91,57 @@ class LocationTests(unittest.TestCase):
 
     def test_no_place(self):
         self.assertIsNone(location_agent.resolve_location("hello there"))
+
+    # --- a place written next to the city, without "Brgy." ---
+
+    REAL_MESSAGE = (
+        "nasa gentry manor paranaque tambo ako at baha ngayon hanggang tuhod. "
+        "Saan ang pinakamalapit na evacuation center."
+    )
+
+    def test_words_next_to_city(self):
+        self.assertEqual(location_agent.words_next_to_city(self.REAL_MESSAGE), ["gentry manor", "tambo"])
+        self.assertEqual(location_agent.words_next_to_city("Nasa Parañaque ako"), [])
+        self.assertEqual(location_agent.words_next_to_city("baha sa Marikina ngayon"), [])
+        self.assertEqual(location_agent.words_next_to_city("Makati weather"), [])
+        self.assertEqual(location_agent.words_next_to_city("hello there"), [])
+
+    def test_place_next_to_city_is_looked_up(self):
+        asked = []
+
+        def geocoder(query):
+            asked.append(query)
+            return (14.5156, 120.9853)  # near Paranaque
+
+        found = location_agent.resolve_location(self.REAL_MESSAGE, geocoder=geocoder)
+        self.assertEqual(asked, ["Gentry Manor, Paranaque"])  # the first candidate was enough
+        self.assertEqual((found.name, found.city, found.precision), ("Gentry Manor, Paranaque", "paranaque", "place"))
+
+    def test_second_candidate_is_tried_when_the_first_is_not_found(self):
+        results = {"Tambo, Paranaque": (14.5100, 120.9900)}
+        found = location_agent.resolve_location(self.REAL_MESSAGE, geocoder=lambda query: results.get(query))
+        self.assertEqual((found.name, found.precision), ("Tambo, Paranaque", "place"))
+
+    def test_place_far_from_the_city_is_ignored(self):
+        found = location_agent.resolve_location(self.REAL_MESSAGE, geocoder=lambda query: (14.70, 121.15))
+        self.assertEqual(found.precision, "city")  # a same-named place on the other side of Metro Manila
+
+    def test_no_lookup_when_no_place_is_written(self):
+        geocoder = mock.Mock(return_value=(14.5, 121.0))
+        found = location_agent.resolve_location("Nasa Parañaque ako", geocoder=geocoder)
+        geocoder.assert_not_called()
+        self.assertEqual(found.precision, "city")
+
+    def test_a_failed_lookup_is_not_remembered(self):
+        location_agent.search_nominatim.cache.clear()
+        with mock.patch.object(location_agent.httpx, "Client", side_effect=RuntimeError("timeout")):
+            self.assertIsNone(location_agent.geocode_place("Gentry Manor, Paranaque"))
+        response = mock.Mock(json=lambda: [{"lat": "14.5156", "lon": "120.9853"}])
+        client = mock.MagicMock()
+        client.__enter__.return_value.get.return_value = response
+        with mock.patch.object(location_agent.httpx, "Client", return_value=client):
+            self.assertEqual(location_agent.geocode_place("Gentry Manor, Paranaque"), (14.5156, 120.9853))
+        location_agent.search_nominatim.cache.clear()
 
     def test_coordinates_outside_ncr_ignored(self):
         self.assertIsNone(location_agent.find_coordinates("10.3157, 123.8854"))
@@ -147,6 +201,51 @@ class EvacuationTests(unittest.TestCase):
     def test_asks_for_location(self):
         reply = evacuation_agent.answer_evacuation_question("nearest evacuation center?", ChatContext())
         self.assertEqual(reply.pending_intent, "evacuation")
+
+
+class AskForPlaceTests(unittest.TestCase):
+    """The evacuation agent asks once for a barangay when only the city is known."""
+
+    def ask(self, question, saved_location=None, geocoder_result=None):
+        context = ChatContext(location=saved_location, get_connection=lambda: object(), now=NOW)
+        rows = [{"name": "Near Gym", "lat": 14.652, "lng": 121.103, "city": "Marikina"}]
+        with mock.patch.object(evacuation_agent, "resolve_location",
+                               side_effect=lambda text: location_agent.resolve_location(text, geocoder=lambda q: geocoder_result)), \
+             mock.patch.object(evacuation_agent, "fetch_evacuation_centers", return_value=rows), \
+             mock.patch.object(evacuation_agent, "assess_flood_risk", return_value=mock.Mock(level=RISK_LOW)), \
+             mock.patch.object(evacuation_agent, "collect_zones", return_value=[]):
+            return evacuation_agent.answer_evacuation_question(question, context)
+
+    def test_city_only_asks_once_and_waits_for_the_answer(self):
+        reply = self.ask("Saan ang evacuation center sa Marikina?")
+        self.assertEqual(reply.pending_intent, "evacuation")
+        self.assertEqual(reply.location.city, "marikina")
+        self.assertIn("Brgy. Tambo, Marikina", reply.text)
+        self.assertNotIn("Near Gym", reply.text)
+
+    def test_second_time_with_the_same_city_lists_the_centers(self):
+        reply = self.ask("Saan ang evacuation center sa Marikina?", saved_location=MARIKINA)
+        self.assertIn("Near Gym", reply.text)
+
+    def test_a_found_place_lists_the_centers_without_asking(self):
+        reply = self.ask("Nasa Gentry Manor Marikina ako. Saan ang evacuation center?", geocoder_result=(14.651, 121.102))
+        self.assertIn("Near Gym", reply.text)
+        self.assertIsNone(reply.pending_intent)
+
+    def test_urgent_message_lists_the_centers_at_once_with_safety_steps_first(self):
+        reply = self.ask("Baha hanggang tuhod na dito sa Marikina, saan ang evacuation center?")
+        self.assertIn("Near Gym", reply.text)
+        self.assertTrue(reply.text.startswith("If you are in danger, call 911"))
+        self.assertIn("you report flooding now", reply.text)  # not a bare "flood risk: LOW"
+
+    def test_normal_message_has_no_urgent_block(self):
+        reply = self.ask("Saan ang evacuation center sa Marikina?", saved_location=MARIKINA)
+        self.assertNotIn("911", reply.text)
+        self.assertIn("(flood risk: LOW)", reply.text)
+
+    def test_a_bare_city_reply_is_not_asked_again(self):
+        reply = self.ask("Marikina")  # the answer to "which city?", not a new request
+        self.assertIn("Near Gym", reply.text)
 
 
 class RouteTests(unittest.TestCase):

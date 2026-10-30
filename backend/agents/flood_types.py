@@ -17,6 +17,7 @@ RISK_ORDER = [RISK_LOW, RISK_WATCH, RISK_HIGH, RISK_CRITICAL]
 
 # How exactly a location is known, most exact first.
 PRECISION_GPS = "gps"
+PRECISION_PLACE = "place"  # a named subdivision, village or landmark found on the map
 PRECISION_BARANGAY = "barangay"
 PRECISION_CITY = "city"
 

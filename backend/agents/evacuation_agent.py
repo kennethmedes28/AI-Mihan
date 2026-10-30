@@ -15,7 +15,14 @@ import logging
 from agents.flood_risk_agent import assess_flood_risk
 from agents.flood_types import AgentReply, ChatContext, FloodZone, Location, PRECISION_CITY
 from agents.flood_zones import collect_zones
-from agents.location_agent import ASK_FOR_LOCATION, describe_precision, nearest_city, resolve_location
+from langgraph_orchestrator.intents import EVACUATION, classify_intent
+from agents.location_agent import (
+    ASK_FOR_LOCATION,
+    ASK_FOR_PLACE,
+    describe_precision,
+    nearest_city,
+    resolve_location,
+)
 from src.services.fetch_postgre_database import fetch_evacuation_centers
 from utils.geo import bearing_name, haversine_m
 from utils.tracing import traced_agent
@@ -29,6 +36,46 @@ NO_DATABASE_ANSWER = (
     "I cannot read the evacuation center list right now. Please ask your barangay or local DRRMO, or call 911.\n"
     "Hindi ko mabasa ang listahan ng evacuation center ngayon. Magtanong sa barangay o lokal na DRRMO, o tumawag sa 911."
 )
+
+
+# Phrases that mean the user is already in the flood. Then there is no time for a question:
+# the centers are listed straight away.
+URGENT_PHRASES = [
+    "hanggang tuhod", "hanggang baywang", "hanggang bewang", "hanggang dibdib", "hanggang leeg",
+    "knee deep", "knee-deep", "waist deep", "waist-deep", "chest deep", "neck deep",
+    "baha ngayon", "bumabaha na", "tumataas ang tubig", "rising water", "water is rising",
+    "stranded", "trapped", "naipit", "nasa bubong", "tulong", "help",
+]
+
+
+# Shown first when the user says they are in the flood now, before the list of centers.
+URGENT_SAFETY = (
+    "If you are in danger, call 911 now. Move to higher ground. Do not walk or drive through floodwater: "
+    "knee-deep water can already knock you down.\n"
+    "Kung nasa panganib, tumawag sa 911 ngayon. Lumipat sa mas mataas na lugar. Huwag tumawid o magmaneho sa baha: "
+    "kahit hanggang tuhod ay maaari kang matumba."
+)
+
+
+def sounds_urgent(question: str) -> bool:
+    """True when the message says the user is in the flood right now."""
+    lowered = question.lower()
+    return any(phrase in lowered for phrase in URGENT_PHRASES)
+
+
+def should_ask_for_place(question: str, found: Location | None, context: ChatContext) -> bool:
+    """True when only the city is known and one question could give a better position.
+
+    Asked at most once: if the saved location already has this city, the user has seen the
+    question (or set the city on purpose), so the centers are listed. Never asked in an emergency,
+    and never when the message is only a place: that is the answer to "where are you?" already.
+    """
+    if found is None or found.precision != PRECISION_CITY or sounds_urgent(question):
+        return False
+    if classify_intent(question) != EVACUATION:
+        return False
+    saved = context.location
+    return not (saved is not None and saved.city == found.city)
 
 
 def is_in_zone(lat: float, lng: float, zones: list[FloodZone]) -> bool:
@@ -84,9 +131,14 @@ def nearest_safe_center(origin: Location, context: ChatContext, zones: list[Floo
 @traced_agent("evacuation_agent")
 def answer_evacuation_question(question: str, context: ChatContext) -> AgentReply:
     """List the nearest safe evacuation centers for the user's location."""
-    origin = resolve_location(question) or context.location
+    found = resolve_location(question)
+    origin = found or context.location
     if origin is None:
         return AgentReply(text=ASK_FOR_LOCATION, pending_intent="evacuation")
+    if should_ask_for_place(question, found, context):
+        return AgentReply(
+            text=ASK_FOR_PLACE.format(city=origin.city.title()), location=origin, pending_intent="evacuation"
+        )
     if context.get_connection is None:
         return AgentReply(text=NO_DATABASE_ANSWER, location=origin)
 
@@ -111,7 +163,13 @@ def answer_evacuation_question(question: str, context: ChatContext) -> AgentRepl
             location=origin,
         )
 
-    lines = [f"Nearest evacuation centers to {origin.name} (flood risk: {risk.level.upper()}):"]
+    urgent = sounds_urgent(question)
+    lines = [URGENT_SAFETY, ""] if urgent else []
+    if urgent:
+        # The user's own report beats the forecast: do not label the area "LOW" next to "the flood is knee-deep".
+        lines.append(f"Nearest evacuation centers to {origin.name} (you report flooding now; forecast risk: {risk.level.upper()}):")
+    else:
+        lines.append(f"Nearest evacuation centers to {origin.name} (flood risk: {risk.level.upper()}):")
     for number, center in enumerate(centers[:CENTERS_SHOWN], start=1):
         direction = bearing_name(origin.lat, origin.lng, center["lat"], center["lng"])
         capacity = f", capacity {center['capacity']}" if center.get("capacity") else ""

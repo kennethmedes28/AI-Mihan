@@ -12,6 +12,11 @@ Inputs, all optional (a missing one is simply skipped and said in the answer):
     * PAGASA rainfall warning colour, if the caller passes the PAGASA text
     * the project's daily dataset, to know what a "high" river or "wet" ground is for each city
 
+When the PAGASA bulletin is empty or unreliable, the backup sources in
+``backup_sources`` (tide, ground height, official sites) are read as well. If too
+few readings are left to be responsible, the fixed safe answer is returned
+instead of a level that may be too low.
+
 The thresholds are rules of thumb. Tune them against past floods.
 
 Example:
@@ -39,8 +44,9 @@ from agents.flood_types import (
     AgentReply,
     ChatContext,
 )
+from agents.backup_sources import BackupData, enough_readings, gather_backup_sources, is_pagasa_reliable
 from agents.location_agent import ASK_FOR_LOCATION, find_city
-from agents.web_lookup_agent import search_trusted_sites
+from agents.safe_answer import safe_reply
 from src.rag.models import PHILIPPINE_TZ
 from utils.ttl_cache import ttl_cache
 from utils.tracing import traced_agent
@@ -298,18 +304,28 @@ def format_risk(risk: FloodRisk) -> str:
     return "\n".join(lines)
 
 
-def format_web_updates(city: str) -> str:
+def apply_backup_readings(risk: FloodRisk, backups: BackupData) -> None:
+    """Add what the backup sources found to the risk, as reasons.
+
+    A high tide or low ground can only make an existing flood signal one step
+    worse (water cannot drain away). On their own they never create a signal,
+    so a calm forecast stays "low".
+    """
+    if backups.is_high_tide:
+        risk.reasons.append(f"High tide is forecast ({backups.peak_tide_m:.1f} m), so floodwater drains slowly.")
+    if backups.is_low_ground:
+        risk.reasons.append(f"This area is low ground ({backups.elevation_m:.0f} m above sea level).")
+    if (backups.is_high_tide or backups.is_low_ground) and risk.level != RISK_LOW:
+        risk.level = raise_level(risk.level)
+
+
+def format_web_updates(pages: list[dict]) -> str:
     """Links to recent official pages about the city, for when the PAGASA bulletin could not be read.
 
     Their text is NOT used to set the risk level: a web search can return an old
     article, and an old "red warning" must not raise a false alarm. The user gets
     the links to read for themselves.
     """
-    try:
-        pages = search_trusted_sites(f"flood rainfall warning {city}")
-    except Exception as error:  # Never let the fallback break the rule-based answer.
-        logger.warning("Web lookup failed: %s", error)
-        return ""
     if not pages:
         return ""
     lines = [f"- {page['title'] or page['source']}: {page['source']}" for page in pages[:3]]
@@ -318,7 +334,11 @@ def format_web_updates(city: str) -> str:
 
 @traced_agent("flood_risk_agent")
 def answer_flood_risk_question(question: str, context: ChatContext) -> AgentReply:
-    """Answer "will it flood?" for the city in the question, or the user's saved city."""
+    """Answer "will it flood?" for the city in the question, or the user's saved city.
+
+    Order: PAGASA first. If its bulletin is empty or unreliable, the backup
+    sources are read too. If too few readings remain, the safe answer is returned.
+    """
     city = find_city(question) or (context.location.city if context.location else None)
     if city is None:
         return AgentReply(text=ASK_FOR_LOCATION, pending_intent="flood_risk")
@@ -327,15 +347,27 @@ def answer_flood_risk_question(question: str, context: ChatContext) -> AgentRepl
         from agents.fetch_weather_using_browser import fetch_weather_pages
 
         pages = fetch_weather_pages("flood rainfall warning")
-        pagasa_text = " ".join(page["text"] for page in pages)
     except Exception as error:  # PAGASA site down or blocked; the other sources still work.
         logger.warning("PAGASA pages unavailable: %s", error)
-        pagasa_text = ""
+        pages = []
 
+    pagasa_ok = is_pagasa_reliable(pages)
+    pagasa_text = " ".join(page["text"] for page in pages) if pagasa_ok else ""
     risk = assess_flood_risk(city, pagasa_text, now=context.now)
-    if not pagasa_text:
-        risk.missing.append("PAGASA bulletin")
-    text = format_risk(risk)
-    if not pagasa_text:
-        text += format_web_updates(city)
-    return AgentReply(text=text)
+    if pagasa_ok:
+        return AgentReply(text=format_risk(risk))
+
+    # PAGASA is empty or unreliable: use the backup sources, then decide if that is enough.
+    risk.missing.append("PAGASA bulletin")
+    now = context.now or datetime.now(PHILIPPINE_TZ)
+    lat, lng = NCR_LOCATIONS[city]
+    backups = gather_backup_sources(city, lat, lng, now)
+    apply_backup_readings(risk, backups)
+
+    # Rain and river were read unless assess_flood_risk listed them as missing.
+    weather_readings = sum(name not in risk.missing for name in ("rain forecast", "river flow"))
+    if not enough_readings(backups, weather_readings):
+        logger.info("PAGASA unreliable and too few backup readings for %s; using the safe answer.", city)
+        return safe_reply()
+
+    return AgentReply(text=format_risk(risk) + format_web_updates(backups.web_pages))

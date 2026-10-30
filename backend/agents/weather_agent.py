@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 
+from agents.backup_sources import is_pagasa_reliable
 from agents.fetch_supabase_open_meteo_datasets import fetch_open_meteo
 from agents.fetch_weather_using_browser import fetch_weather_pages
 from agents.flood_types import AgentReply
@@ -213,10 +214,11 @@ def answer_weather_question(question: str, llm: BaseChatModel) -> AgentReply:
 
     pagasa_pages, open_meteo_result = fetch_both_sources(question)
 
-    # No PAGASA text means no official source, which is low confidence: look on the trusted websites.
+    # An empty or unreliable PAGASA bulletin (a block page, a stub) is low confidence:
+    # look on the trusted websites instead. Unreliable pages are not passed to the model.
     used_web = False
-    if not pagasa_pages:
-        logger.info("No PAGASA pages; searching trusted websites.")
+    if not is_pagasa_reliable(pagasa_pages):
+        logger.info("PAGASA pages empty or unreliable; searching trusted websites.")
         pagasa_pages = search_trusted_sites(question)
         used_web = bool(pagasa_pages)
 
