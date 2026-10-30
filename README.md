@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/public/flood-gentic_drop_tear-glitch.gif" alt="Flood-Gentic" width="100%">
+  <img src="frontend/public/flood-gentic_cropped.gif" alt="Flood-Gentic" height="auto" width="90%">
 </p>
 
 <h1 align="center" id="title">
