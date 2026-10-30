@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 130" role="img" aria-label="Flood-Gentic">
+  <title>Flood-Gentic</title>
+  <defs>
+    <!-- Water-blue gradient; readable on both light and dark GitHub themes. -->
+    <linearGradient id="water" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0ea5e9"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <text x="450" y="98" text-anchor="middle"
+        font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="104" font-weight="800" letter-spacing="3"
+        fill="url(#water)">Flood-Gentic</text>
+</svg>

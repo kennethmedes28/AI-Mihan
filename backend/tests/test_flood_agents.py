@@ -106,6 +106,13 @@ class LocationTests(unittest.TestCase):
         self.assertEqual(location_agent.words_next_to_city("Makati weather"), [])
         self.assertEqual(location_agent.words_next_to_city("hello there"), [])
 
+    def test_place_and_city_separated_by_a_comma(self):
+        words = location_agent.words_next_to_city
+        self.assertEqual(words("Im in divisoria, manila. I want to report flood"), ["divisoria"])
+        self.assertEqual(words("Gentry Manor, Tambo, Paranaque"), ["tambo"])
+        self.assertEqual(words("Paranaque, Tambo"), ["tambo"])
+        self.assertEqual(words("baha sa Tondo. Manila ako"), [])  # a full stop still ends the thought
+
     def test_place_next_to_city_is_looked_up(self):
         asked = []
 

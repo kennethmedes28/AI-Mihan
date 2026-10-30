@@ -127,9 +127,10 @@ def words_next_to_city(text: str) -> list[str]:
     _, start, end = match
     plain = plain_text(text)
 
-    # Only the part of the sentence the city is in; words past a comma or full stop are another thought.
-    before = re.split(r"[,.;!?]", plain[:start])[-1].split()
-    after = re.split(r"[,.;!?]", plain[end:])[0].split()
+    # Only the part of the sentence the city is in; words past a full stop are another thought.
+    # A comma right next to the city ("Divisoria, Manila") joins the place to it, so it is dropped first.
+    before = re.split(r"[,.;!?]", plain[:start].rstrip(" ,"))[-1].split()
+    after = re.split(r"[,.;!?]", plain[end:].lstrip(" ,"))[0].split()
 
     before_words: list[str] = []
     for word in reversed(before):
