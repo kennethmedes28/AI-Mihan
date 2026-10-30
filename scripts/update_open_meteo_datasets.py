@@ -12,8 +12,9 @@ What it updates (the points come from datasets/ncr_locations.csv):
     ncr_weather_daily_2020-2026.csv   raw daily weather + river discharge
     ncr_flood_features_daily.csv      the same days plus rolling rain and discharge features
 
-Only days after the last day already in the files are requested, and rows that
-already exist keep their exact text, so running it twice in a row does nothing.
+Days after the last day in the files are requested, plus the last REFRESH_DAYS
+days up to the end date, because Open-Meteo revises its newest days. Those
+rows are replaced; every older row keeps its exact text.
 New rows are placed so each file stays sorted by location_id, then date.
 Nothing is written unless every request succeeded.
 
@@ -38,8 +39,9 @@ import argparse
 import tempfile
 import time
 from io import StringIO
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
@@ -54,8 +56,13 @@ ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 FLOOD_URL = "https://flood-api.open-meteo.com/v1/flood"
 TIMEZONE = "Asia/Manila"
 
-# The newest days are still being finalised, so by default stop two days before today.
-DEFAULT_END_LAG_DAYS = 2
+# By default fetch up to and including today (in TIMEZONE, so a server in UTC agrees
+# with Manila). Days Open-Meteo has no data for yet come back empty and are skipped.
+DEFAULT_END_LAG_DAYS = 0
+
+# The newest days are partial or revised later, so each normal run re-fetches this many
+# days ending at the end date and replaces those rows.
+REFRESH_DAYS = 2
 
 # Rate limiting. 0.5 s between calls is at most 120 calls a minute (limit: 600).
 SECONDS_BETWEEN_CALLS = 0.5
@@ -298,11 +305,13 @@ def merge_rows(csv_path: Path, rows: pd.DataFrame) -> None:
     """Add rows to a CSV, keeping it sorted by location_id then date.
 
     Old lines are read and written back as plain text, so their values are
-    not reformatted; only the new lines are added in the right place.
+    not reformatted. A new row replaces an old row with the same location_id
+    and date (a refreshed day); all other old rows are kept as they are.
     """
     old_text = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
     new_text = pd.read_csv(StringIO(rows.to_csv(index=False)), dtype=str, keep_default_na=False)
     combined = pd.concat([old_text, new_text], ignore_index=True)
+    combined = combined.drop_duplicates(["location_id", "date"], keep="last")
     combined = combined.sort_values(["location_id", "date"], key=sort_key, kind="stable")
     combined.to_csv(csv_path, index=False, lineterminator="\n")
 
@@ -319,7 +328,7 @@ def sort_key(column: pd.Series) -> pd.Series:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--end-date", help="last day to fetch, YYYY-MM-DD (default: today minus 2 days)")
+    parser.add_argument("--end-date", help="last day to fetch, YYYY-MM-DD (default: today)")
     parser.add_argument("--max-calls", type=int, help=f"stop if more calls are needed (default {MAX_CALLS_PER_RUN}, "
                                                       f"{REBUILD_MAX_CALLS} with --rebuild)")
     parser.add_argument("--rebuild", action="store_true",
@@ -334,7 +343,8 @@ def main() -> None:
     weather_columns = list(weather.columns)
     feature_columns = list(pd.read_csv(FEATURES_CSV, nrows=0).columns)
 
-    end = date.fromisoformat(args.end_date) if args.end_date else date.today() - timedelta(days=DEFAULT_END_LAG_DAYS)
+    today = datetime.now(ZoneInfo(TIMEZONE)).date()
+    end = date.fromisoformat(args.end_date) if args.end_date else today - timedelta(days=DEFAULT_END_LAG_DAYS)
     if args.rebuild:
         weather = weather.iloc[0:0]  # the old rows are not kept
         start = REBUILD_START
@@ -342,7 +352,9 @@ def main() -> None:
         seconds_between_calls = REBUILD_SECONDS_BETWEEN_CALLS
         max_calls = args.max_calls or REBUILD_MAX_CALLS
     else:
-        start = find_first_missing_day(weather, locations)
+        # Also re-fetch the last REFRESH_DAYS days, and forget their old rows so the new ones replace them.
+        start = min(find_first_missing_day(weather, locations), end - timedelta(days=REFRESH_DAYS - 1))
+        weather = weather[weather["date"] < start.isoformat()]
         archive_window_days = discharge_window_days = CHUNK_DAYS
         seconds_between_calls = SECONDS_BETWEEN_CALLS
         max_calls = args.max_calls or MAX_CALLS_PER_RUN
