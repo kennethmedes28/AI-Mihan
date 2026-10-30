@@ -108,3 +108,22 @@ def insert_report(
         "VALUES (%s, %s, %s, %s, 'unverified', 'community', %s, %s)",
         [hazard, city, barangay, body, lat, lng],
     )
+
+
+def insert_request(
+    conn,
+    kind: str,
+    city: str,
+    barangay: str | None,
+    details: str,
+    people_count: int | None = None,
+    contact_phone: str | None = None,
+    lat: float | None = None,
+    lng: float | None = None,
+) -> None:
+    """Store a supply or assistance request. It starts unverified (needs sql/002_requests.sql)."""
+    conn.execute(
+        "INSERT INTO requests (kind, city, barangay, details, people_count, contact_phone, lat, lng, status) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'unverified')",
+        [kind, city, barangay, details, people_count, contact_phone, lat, lng],
+    )

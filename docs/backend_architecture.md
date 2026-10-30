@@ -2,9 +2,9 @@
 
 Design for the Flood-Gentic backend (FastAPI + LangGraph on Railway, data in Supabase).
 Status: **partly built**. Built: the flood agents, the LangGraph chat graph with a Postgres checkpointer, the RAG package
-(chunking, embeddings, FAISS and pgvector stores, retrieval), the realtime voice WebSocket, and the dataset update scripts.
-Not built yet: the FastAPI app itself (`main.py` is still a stub), the HTTP routers and a scheduled
-ingestion worker. Retrieval details live in `docs/ingestion_details.md`, voice in `docs/voice_chat.md`, the weather
+(chunking, embeddings, FAISS and pgvector stores, retrieval), the FastAPI app and its routers (`src/api/`), the realtime voice WebSocket,
+and the dataset update scripts. Not built yet: streaming and a source list on `/chat`, media upload, a staff view of reports and requests,
+and a scheduled ingestion worker. Retrieval details live in `docs/ingestion_details.md`, voice in `docs/voice_chat.md`, the weather
 datasets in `docs/dataset_updates.md`; this document covers everything around them.
 
 ## 1. Goals and constraints
@@ -37,7 +37,7 @@ flowchart LR
 
 ```
 backend/
-  main.py                 # stub: the FastAPI app and router registration are still to do
+  main.py                 # entry point: `uvicorn main:app` (the app is built in src/api/app.py)
   agents/                 # one module per flood agent (section 5)
     contacts_agent.py       hotlines for a city, copied from the CSV (no model)
     document_agents.py      flood questions answered from stored documents (RAG)
@@ -72,29 +72,48 @@ backend/
       reranking.py          cross-encoder rerank
       rules.py              expiry, trust boost, diversity cap, score threshold
       models.py             Chunk and SearchFilter
-    services/             # fetch_postgre_database.py
+    api/                  # the HTTP API (section 4)
+      app.py                create_app(): CORS, rate limits, error format, routers
+      startup.py            opens the database, chat model, document search and chat graph
+      settings.py           environment settings (CORS_ORIGINS, CHECKPOINTER, rate limits, ...)
+      schemas.py            request and response models (Pydantic)
+      deps.py               shared dependencies, rate-limit check and error texts
+      rate_limit.py         in-memory sliding-window limiter
+      routers/              chat, reports, help_requests, evacuation, advisories, health
+    services/             # fetch_postgre_database.py, shared_connection.py
   tests/                  # agents, graph, voice and camera WebSockets, tracing helpers (conftest.py keeps tests out of LangSmith)
 scripts/                  # ingestion and dataset scripts (docs/dataset_updates.md)
 ```
 
-Planned but not built: `src/api/` (routers: chat, reports, requests, alerts, health), `src/models/` (Pydantic schemas) and `src/config.py`.
-Keep each module small and single-purpose; routers will contain no business logic.
+Keep each module small and single-purpose; routers contain no business logic. Request validation lives in `src/api/schemas.py`.
 
 ## 4. API surface
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/chat` | Ask a question; streams the answer (SSE) with citations |
-| POST | `/reports` | Submit a community incident report |
-| GET | `/reports` | List recent reports (filter by area, hazard, status) |
-| POST | `/requests` | Submit a supply / assistance request |
-| GET | `/evacuation-centers` | Search centers by city / barangay |
-| GET | `/advisories/latest` | Current official advisories for an area |
-| GET | `/health` | Liveness and dependency check |
-| WS | `/ws/voice` | Live speech-to-text for the chat box. **Built**, see `docs/voice_chat.md` |
-| WS | `/ws/camera` | Webcam flood check, one frame every few seconds. **Built**, see `docs/flood_media.md` |
+| Method | Path | Purpose | State |
+|---|---|---|---|
+| POST | `/chat` | Ask a question; returns the reply, a `thread_id` and the `safe_answer` flag | **Built** (JSON; no streaming or source list yet) |
+| POST | `/reports` | Submit a community incident report | **Built** (needs the `reports` table) |
+| GET | `/reports` | List recent reports (filter by city, hazard); rejected ones and phone-like digits are hidden | **Built** (needs the `reports` table) |
+| POST | `/requests` | Submit a supply / assistance request. Write only: it can hold a phone number | **Built** (needs the `requests` table) |
+| GET | `/evacuation-centers` | Search centers by city / barangay | **Built** |
+| GET | `/advisories/latest` | Current PAGASA bulletins; says plainly when they cannot be read | **Built** (national pages; `city` only marks which mention it) |
+| GET | `/health`, `/health/ready` | Dependency check; `/health/ready` is 503 unless the database and chat graph work | **Built** |
+| WS | `/ws/voice` | Live speech-to-text for the chat box, see `docs/voice_chat.md` | **Built** |
+| WS | `/ws/camera` | Webcam flood check, one frame every few seconds, see `docs/flood_media.md` | **Built** |
 
-Only `/ws/voice` and `/ws/camera` exist so far (`voice/websocket_router.py`, `video/camera_router.py`); the other endpoints are planned.
+How the API behaves:
+
+- **Coverage:** every position must lie inside Metro Manila. A GPS point outside it is a 422 that says so and gives 911; it is not matched to the nearest city.
+- **Errors:** a person in a flood can see them, so each one that is not a plain validation error says what to do next (911, barangay, DRRMO).
+  Validation errors list where the problem is and what it is, but never repeat the value that was sent.
+- **Limits:** `/chat`, `/reports` and `/requests` are limited per client address (`CHAT_PER_MINUTE`, `REPORTS_PER_HOUR`, `REQUESTS_PER_HOUR`).
+  The limiter lives in one process; use a shared limit if the API runs on several replicas.
+- **Conversations:** `thread_id` must be a UUID. Without one, `/chat` starts a new conversation and returns the id to send back.
+- **Soft failures:** without `MUSE_API` the weather and document answers fail but everything that needs no model keeps working;
+  if document search cannot start, the document agent gives the fixed safe answer.
+- **Settings:** `CORS_ORIGINS`, `CHECKPOINTER` (`postgres` or `memory`), `ENABLE_RAG`, `TRUST_PROXY_HEADERS`, `ORS_API_KEY`; see `src/api/settings.py`.
+
+Run it with `uv run uvicorn main:app --reload` and open `/docs` for the interactive documentation.
 
 Request and response bodies are Pydantic models. Every chat response includes `sources`
 (title, agency, issued time, link) so the UI can show provenance.
@@ -214,8 +233,10 @@ erDiagram
 |---|---|
 | `chunks` | Created and filled (359 rows, 1024-dimension vectors, HNSW index). One table keyed by `(doc_id, chunk_idx)`; there is no separate `documents` table, so source, type, trust tier, hazard, city and validity live in the `metadata` column |
 | `ncr_locations`, `ncr_weather_daily`, `ncr_flood_features_daily` | Created and filled by `scripts/load_to_supabase.py` and kept current by the daily workflow (`docs/dataset_updates.md`) |
-| `reports`, `evacuation_centers` | Queried by the report, evacuation and route agents (`src/services/fetch_postgre_database.py`; `sql/001_reports_geo.sql` adds `lat` / `lng` to `reports`) but **not created yet** in this database |
-| `requests`, `conversations`, `messages` | Not created. Conversation state is saved by the LangGraph checkpointer instead |
+| `evacuation_centers` | Created and filled; read by the evacuation and route agents and by `GET /evacuation-centers` |
+| `reports` | Queried by the report agent, the route agent and `/reports`. The scripts `sql/000_reports.sql` then `sql/001_reports_geo.sql` create it; **they have not been run on this database yet** |
+| `requests` | Written by `POST /requests`. `sql/002_requests.sql` creates it; **not run yet** |
+| `conversations`, `messages` | Not created. Conversation state is saved by the LangGraph checkpointer instead |
 
 All the tables above have row-level security on with no policies: only the backend's direct Postgres connection can read or write them.
 

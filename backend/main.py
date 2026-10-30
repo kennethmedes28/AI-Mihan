@@ -1,6 +1,10 @@
-def main():
-    print("Hello from backend!")
+"""Entry point of the Flood-Gentic API.
 
+    uv run uvicorn main:app --reload
 
-if __name__ == "__main__":
-    main()
+The application itself is built in ``src/api/app.py``.
+"""
+
+from src.api.app import create_app
+
+app = create_app()

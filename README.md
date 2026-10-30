@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center" id="title">
-  <img src="docs/assets/flood-gentic-title.svg" alt="Flood-Gentic" style="font-size: 80px; height: auto; width: 85%;" />
+  <img src="frontend/public/flood-gentic-title.svg" alt="Flood-Gentic" style="font-size: 80px; height: auto; width: 85%;" />
 </h1>
 
 A flood assistant for Metro Manila (NCR). Residents ask questions in English or Filipino and get answers
@@ -12,9 +12,8 @@ avoids flooded streets, hotlines, and weather from PAGASA and Open-Meteo.
 
 When the data is missing or unreliable, it says so and gives a fixed safety answer. It does not guess.
 
-> **Status: early.** The agents, chat graph, retrieval, voice and flood-photo checks are built and tested.
-> The FastAPI server (`backend/main.py` is a stub) and the Next.js frontend are not built yet.
-> A Streamlit dashboard is included as a sample. See [docs/backend_architecture.md](docs/backend_architecture.md).
+> **Status: early.** The agents, chat graph, retrieval, voice, flood-photo checks and the HTTP API are built and tested.
+> The Next.js frontend is not built yet. A Streamlit dashboard is included as a sample. See [docs/backend_architecture.md](docs/backend_architecture.md).
 
 ## Why this matters
 
@@ -51,10 +50,10 @@ A person, such as a barangay or DRRMO, makes the real decisions.
 
 | Who | How it helps | Status |
 |---|---|---|
-| A resident in a flooded area | Nearest safe evacuation center, hotlines, safety steps, and a route that avoids floodwater | Built (agents only) |
-| A family preparing before a storm | Flood risk for their area, forecasts, and checklists from the preparedness manuals | Built (agents only) |
-| A neighbour who sees a flooded street | Report it, so routes avoid it | Built; needs the `reports` table |
-| Someone with a photo or video of flooding | Checks for flood water and gives a rough depth | Built (agents only) |
+| A resident in a flooded area | Nearest safe evacuation center, hotlines, safety steps, and a route that avoids floodwater | Built (API and agents) |
+| A family preparing before a storm | Flood risk for their area, forecasts, and checklists from the preparedness manuals | Built (API and agents) |
+| A neighbour who sees a flooded street | Report it, so routes avoid it | Built; needs the `reports` table to be created |
+| Someone with a photo or video of flooding | Checks for flood water and gives a rough depth | Built (API and agents) |
 | Barangay and DRRMO staff | A live list of reports, and later relief and supply requests, sorted by urgency | Planned |
 | Relief volunteers | Matching needs with available supplies and centers | Planned |
 
@@ -104,8 +103,10 @@ If only the city is known, the answer says distances are from the city centre.
 backend/                 Python app (uv project)
   agents/                one module per agent: evacuation, flood risk, route, report, weather, location, ...
   langgraph_orchestrator/ chat graph, keyword routing, start-up
+  src/api/               the HTTP API: app, routers, request models, rate limits
   src/rag/               document ingestion and retrieval (vector + keyword search, reranking)
   voice/  video/         speech-to-text WebSocket; flood photo and video checks
+  sql/                   table scripts to run once in Supabase
   tests/                 unit tests (no network, browser or model needed)
 corpus/                  source documents and CSVs (evacuation centers, hotlines, locations)
 datasets/                daily NCR weather and flood-feature CSVs
@@ -152,10 +153,38 @@ pip install -r frontend_streamlit/requirements.txt
 streamlit run frontend_streamlit/app.py
 ```
 
-### Ask the agent one question
+### Run the API
 
-There is no server yet. To try the chat graph, build it with `langgraph_orchestrator.graph.build_graph` and call
-`ask_reply` (see the docstrings in `graph.py` and `service.py`). The database must be reachable.
+```bash
+cd backend
+uv run uvicorn main:app --reload        # then open http://127.0.0.1:8000/docs
+```
+
+For local work without the Postgres conversation store, add `CHECKPOINTER=memory` (conversations are then lost on restart).
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/chat` | One message in, one reply out. Send back the returned `thread_id` to continue the conversation |
+| POST, GET | `/reports` | Submit or list community flood reports (unverified) |
+| POST | `/requests` | Submit a supply or assistance request (write only) |
+| GET | `/evacuation-centers` | Search the centers by city and barangay |
+| GET | `/advisories/latest` | Current PAGASA bulletins |
+| GET | `/health`, `/health/ready` | What works right now |
+| WS | `/ws/voice`, `/ws/camera` | Live speech-to-text and the webcam flood check |
+
+```bash
+curl -s localhost:8000/chat -H 'Content-Type: application/json' \
+  -d '{"message": "Nasa Divisoria, Manila ako. Baha hanggang tuhod. Saan ang pinakamalapit na evacuation center?"}'
+```
+
+Optional settings (environment variables): `CORS_ORIGINS`, `CHECKPOINTER` (`postgres` or `memory`), `ENABLE_RAG`,
+`TRUST_PROXY_HEADERS`, `CHAT_PER_MINUTE`, `REPORTS_PER_HOUR`, `REQUESTS_PER_HOUR`, `ORS_API_KEY`.
+See [docs/backend_architecture.md](docs/backend_architecture.md) section 4.
+
+### Create the missing tables
+
+`reports` and `requests` do not exist in Supabase yet. Run these once, in order, in the Supabase SQL editor:
+`backend/sql/000_reports.sql`, `backend/sql/001_reports_geo.sql`, `backend/sql/002_requests.sql`.
 
 ## Data
 
@@ -197,21 +226,23 @@ do not walk or drive through floodwater. Official sources: [pagasa.dost.gov.ph](
 - **Distances are straight lines** and map positions are approximate. Always confirm with the barangay or local DRRMO.
 - **Reports are unverified** community input. They never override PAGASA or NDRRMC information.
 - **The risk level is a rule of thumb**, not an official warning. The thresholds should be tuned against past floods.
-- **The `reports` table has no creation script yet.** `backend/sql/001_reports_geo.sql` only adds the `lat` and `lng` columns to a table that must already exist. Until it is created in Supabase, community reports cannot be saved or read.
+- **The `reports` and `requests` tables are not created in Supabase yet.** The scripts exist in `backend/sql/` but have not been run. Until they are, reports and requests cannot be saved, and `GET /reports` returns a 503.
 - **One request per message works best.** A message that reports a flood and also asks for an evacuation center only gets the report handled.
 - **Urgency is detected from phrases** ("hanggang tuhod", "waist-deep"), not understood. Wording the lists don't include, such as "up to waist" or "hanggang hita", is treated as a normal message.
 - **A stale PAGASA bulletin still counts as reliable** if it is long and well formed. There is no check on its issue time yet.
 - **Backup sources are limited.** MMDA gauges (blocked by a site challenge), Project NOAH (a JavaScript app with no searchable text) and GPM IMERG satellite rainfall (needs a NASA login) are not used.
 - **Tide and ground-height rules are rules of thumb** (high tide at 1.2 m or more, low ground at 5 m or less) and are untuned. The tide model only covers the sea, so inland cities often have no tide data.
 - **Only the city is recorded for a typed place.** A subdivision such as "Gentry Manor" is found on the map, but the barangay ("Tambo") is not saved with the location.
-- **No server or app yet.** The agents can only be used from code.
+- **No app yet.** The API works, but there is no frontend. `/chat` returns the whole reply at once (no streaming) and no list of sources, and photos or videos cannot be sent to it yet.
+- **No staff access.** Requests and reports can be submitted, but there is no protected view for barangay or DRRMO staff, and the API has no login.
 
 ## Future improvements
 
 **Make it usable**
-- Build the FastAPI server and routers (`/chat`, `/reports`, health) and the Next.js frontend.
-- Create the `reports` table, and add a creation script next to `001_reports_geo.sql`.
-- Add a small command-line script to ask the agent one question without writing code.
+- Build the Next.js frontend.
+- Run the table scripts in `backend/sql/` on Supabase.
+- Stream `/chat` replies and return a list of sources with each answer; accept a photo or video on `/chat`.
+- Add a protected staff view for reports and requests, with login.
 - Add CI: backend tests and lint, frontend build, secret scanning and dependency updates.
 - Add an alert when the nightly dataset update fails, and a check that the newest CSV date is recent.
 
