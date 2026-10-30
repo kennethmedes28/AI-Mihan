@@ -181,6 +181,17 @@ do not walk or drive through floodwater. Official sources: [pagasa.dost.gov.ph](
 - Keep the barangay with a place the user typed, using a list of Metro Manila barangays, and match place names against the evacuation-center table.
 - Check the issue time of PAGASA bulletins and treat old ones as unreliable.
 
+English questions it should answer better, to use as test cases for the items above:
+
+| Question | What goes wrong now | Fix needed |
+|---|---|---|
+| `I'm in Divisoria, Manila. I want to report a flood up to my waist. Where can I go to an evacuation center, and how long will it last?` | Only the report is handled; no safety steps, no centers, no answer about duration | Several requests in one message; wider emergency phrases; duration answer |
+| `Water is up to my waist. Where is the nearest evacuation center?` | "Up to my waist" is not recognised as an emergency, and with no place named it only asks "which city?": no 911, no safety steps | Wider emergency phrases; safety steps before any question |
+| `I'm in Tanza, Cavite. Do you have flood data?` | Asks "which city?" again instead of saying the area is not covered | Clear "outside coverage" reply |
+| `How long will the flood last in Marikina?` | Answers with the forecast risk ("LOW, no flood signal"), which does not answer the question and reads as reassurance to someone already flooded | Duration answer from rain and tide, with a clear limit |
+| `What is the process of relief goods?` | Describes what the government does, with citations that name no document | Sources list; steps a resident can take |
+| `I'm at Gentry Manor, Tambo, Parañaque. Which barangay is this?` | Replies "Got it: Tambo, Paranaque" without answering; "Gentry Manor" is dropped because only the words right next to the city are read | Barangay list and matching; try the longer place text first |
+
 **Cover more**
 - Extend the datasets, centers and city tables beyond NCR, starting with Cavite, Rizal and Bulacan. Until then, give a clear "outside coverage" reply with contacts instead of asking for the location again.
 - Add flood event labels (MMDA gauges, NDRRMC reports, Project NOAH hazard maps), river and dam levels, terrain and drainage layers, and satellite rainfall for better risk rules.
