@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/public/flood-gentic_cropped.gif" alt="Flood-Gentic" height="auto" width="90%">
+  <img src="frontend/public/flood-gentic_cropped.gif" alt="Flood-Gentic" height="auto" width="100%">
 </p>
 
 <h1 align="center" id="title">
@@ -181,6 +181,15 @@ do not walk or drive through floodwater. Official sources: [pagasa.dost.gov.ph](
 - Keep the barangay with a place the user typed, using a list of Metro Manila barangays, and match place names against the evacuation-center table.
 - Check the issue time of PAGASA bulletins and treat old ones as unreliable.
 
+Tagalog questions it should answer better, to use as test cases for the items above:
+
+| Question | What goes wrong now | Fix needed |
+|---|---|---|
+| `Nasa Divisoria, Manila ako. Gusto kong mag-report ng baha hanggang baywang. Saan ako pwedeng pumunta na evacuation center at gaano katagal ang baha?` | Gives the 911 and hotline reply (correct), but the report is not saved, no centers are listed, and duration is not answered | Several requests in one message; add the nearest centers to the emergency reply; duration answer |
+| `Hanggang hita na ang baha. Saan ang pinakamalapit na evacuation center?` | "Hanggang hita" is not recognised as urgent, and with no place named it only asks "saang lungsod?": no 911, no safety steps | Wider emergency phrases; safety steps before any question |
+| `Gaano katagal ang baha sa Marikina?` | Answers with the forecast risk ("LOW, walang senyales ng baha"), which does not answer the question and reads as reassurance to someone already flooded | Duration answer from rain and tide, with a clear limit |
+| `Nasa Tanza, Cavite ako. May data ka ba ng baha?` | Asks "saang lungsod?" again instead of saying the area is not covered | Clear "outside coverage" reply |
+
 English questions it should answer better, to use as test cases for the items above:
 
 | Question | What goes wrong now | Fix needed |
@@ -190,7 +199,6 @@ English questions it should answer better, to use as test cases for the items ab
 | `I'm in Tanza, Cavite. Do you have flood data?` | Asks "which city?" again instead of saying the area is not covered | Clear "outside coverage" reply |
 | `How long will the flood last in Marikina?` | Answers with the forecast risk ("LOW, no flood signal"), which does not answer the question and reads as reassurance to someone already flooded | Duration answer from rain and tide, with a clear limit |
 | `What is the process of relief goods?` | Describes what the government does, with citations that name no document | Sources list; steps a resident can take |
-| `I'm at Gentry Manor, Tambo, Parañaque. Which barangay is this?` | Replies "Got it: Tambo, Paranaque" without answering; "Gentry Manor" is dropped because only the words right next to the city are read | Barangay list and matching; try the longer place text first |
 
 **Cover more**
 - Extend the datasets, centers and city tables beyond NCR, starting with Cavite, Rizal and Bulacan. Until then, give a clear "outside coverage" reply with contacts instead of asking for the location again.
