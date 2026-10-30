@@ -189,3 +189,10 @@ do not walk or drive through floodwater. Official sources: [pagasa.dost.gov.ph](
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+
+<footer align="center">
+  <a href="/home/kenneth28/my_projects/Flood-Gentic/frontend/public/thankyou_footer.jpg" target="_blank">
+    <img src="/home/kenneth28/my_projects/Flood-Gentic/frontend/public/thankyou_footer.jpg" alt="Flood-Gents" width="100%">
+  </a>
+</footer>
