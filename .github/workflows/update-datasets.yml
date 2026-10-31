@@ -1,15 +1,15 @@
 name: Update datasets
 
-# Every day at 00:00 Philippine time (UTC+8, no daylight saving) = 16:00 UTC the day before.
+# Every day at 12:00 UTC = 20:00 Philippine time (UTC+8, no daylight saving).
 # GitHub can start scheduled runs a few minutes late.
 on:
   schedule:
-    - cron: "0 16 * * *"
+    - cron: "0 12 * * *"
   workflow_dispatch:
 
-# The last step pushes the updated CSV files back to the repository.
+# The job only reads the repository: the data goes straight from Open-Meteo to Supabase.
 permissions:
-  contents: write
+  contents: read
 
 # Never run two updates at the same time.
 concurrency:
@@ -21,36 +21,35 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
       - name: Install dependencies
         run: pip install pandas httpx "psycopg[binary]" python-dotenv
 
-      # Adds the missing days to the CSV files in datasets/ (skips days that exist).
-      - name: Fetch new days from Open-Meteo
-        run: python scripts/update_open_meteo_datasets.py
-
-      # Adds only the rows Supabase does not have yet. Never updates or deletes.
-      - name: Append new rows to Supabase
+      # Reads the last day of every location from Supabase, fetches only the missing days from Open-Meteo,
+      # and writes both tables in one transaction (nothing is written if a step fails).
+      # The end date is yesterday (Manila time): today is still in progress at 20:00, so only finished days are stored.
+      # The last 7 days are fetched again every night and replace the stored values, because Open-Meteo revises
+      # recent days. A day it returns blank is skipped and filled in by a later run.
+      # A failed attempt (for example an Open-Meteo limit that clears after a pause) is retried twice.
+      - name: Update Supabase from Open-Meteo
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_PASSWORD: ${{ secrets.SUPABASE_PASSWORD }}
           SUPABASE_POOLER_HOST: ${{ secrets.SUPABASE_POOLER_HOST }}
-        run: python scripts/sync_datasets_to_supabase.py
-
-      # Keeps the repository copy current, so the next run only asks for the newest days.
-      - name: Commit updated CSV files
         run: |
-          if git diff --quiet -- datasets; then
-            echo "No new data."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add datasets/ncr_weather_daily_2020-2026.csv datasets/ncr_flood_features_daily.csv
-          git commit -m "Update daily weather datasets"
-          git push
+          END_DATE="$(TZ=Asia/Manila date -d yesterday +%F)"
+          for attempt in 1 2 3; do
+            if python scripts/update_supabase_from_open_meteo.py --end-date "$END_DATE" --refresh-days 7; then
+              exit 0
+            fi
+            echo "Attempt $attempt failed."
+            if [ "$attempt" -lt 3 ]; then
+              sleep 120
+            fi
+          done
+          exit 1

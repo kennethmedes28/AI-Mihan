@@ -256,10 +256,16 @@ See [docs/backend_architecture.md](docs/backend_architecture.md) section 4.
 
 ## Data
 
-Weather and flood-feature CSVs in `datasets/` are updated every day at 00:00 Philippine time by
-[`update-datasets.yml`](.github/workflows/update-datasets.yml). It fetches the missing days from Open-Meteo,
-appends new rows to Supabase (never updates or deletes), and commits the CSVs back. The workflow needs the repository
-secrets `SUPABASE_PROJECT_REF`, `SUPABASE_PASSWORD` and `SUPABASE_POOLER_HOST`. Details: [docs/dataset_updates.md](docs/dataset_updates.md).
+The weather and flood-feature tables in Supabase are updated every day at 20:00 Philippine time by
+[`update-datasets.yml`](.github/workflows/update-datasets.yml). It reads the last day of each location from Supabase,
+fetches only the missing finished days from Open-Meteo, and writes them in one transaction. No CSV files or local
+checkout are involved. It also fetches the last 7 days again every night and replaces them with Open-Meteo's revised values, and it never deletes anything.
+The workflow needs the repository secrets `SUPABASE_PROJECT_REF`, `SUPABASE_PASSWORD` and `SUPABASE_POOLER_HOST`.
+Details: [docs/dataset_updates.md](docs/dataset_updates.md).
+
+To run the same update yourself: `uv run python ../scripts/update_supabase_from_open_meteo.py` from `backend/`
+(add `--dry-run` to only see the plan, or `--refresh-days 7` to re-fetch the last 7 days). The CSV files in `datasets/` are no longer updated by the workflow; refresh them
+with `scripts/update_open_meteo_datasets.py` before using `scripts/load_to_supabase.py`.
 
 ## Safety
 

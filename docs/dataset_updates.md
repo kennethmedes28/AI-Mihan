@@ -12,15 +12,26 @@ flowchart LR
     U --> CSV[datasets/*.csv]
     CSV --> S[sync_datasets_to_supabase.py]
     S --> DB[(Supabase Postgres)]
-    GH[GitHub Actions<br/>00:00 Philippine time] -.runs.-> U
-    GH -.runs.-> S
-    GH -.commits.-> CSV
+    OM --> D[update_supabase_from_open_meteo.py]
+    DB --> D
+    D --> DB
+    GH[GitHub Actions<br/>20:00 Philippine time] -.runs.-> D
 ```
 
-Both steps only **add** data. Rows that already exist are skipped and never changed.
+There are two ways to keep Supabase current:
+
+* **Direct (used by the scheduled workflow):** `update_supabase_from_open_meteo.py` reads the last day of each location
+  from Supabase, fetches only the missing days from Open-Meteo, and writes them. No CSV files and no local copy of the
+  repository are involved. It also replaces the last 2 days (`--refresh-days`, 7 in the workflow) with Open-Meteo's revised values.
+* **Through the CSV files (by hand):** `update_open_meteo_datasets.py` writes the CSVs, then `sync_datasets_to_supabase.py`
+  adds the rows Supabase does not have yet. This path only **adds** data and never changes an existing row.
+
+The CSV files in `datasets/` are no longer updated by the workflow, so they fall behind Supabase. Update them with
+`update_open_meteo_datasets.py` before running `load_to_supabase.py`, which reloads Supabase from them.
 
 | Script | Does | Writes to |
 |---|---|---|
+| `scripts/update_supabase_from_open_meteo.py` | Fetches the missing days from Open-Meteo straight into Supabase (the nightly job) | Supabase tables |
 | `scripts/update_open_meteo_datasets.py` | Fetches the missing days from Open-Meteo | the two daily CSV files |
 | `scripts/sync_datasets_to_supabase.py` | Adds the rows Supabase does not have yet | Supabase tables |
 | `scripts/load_to_supabase.py` | One-time full load: empties and reloads the dataset tables, upserts the FAISS chunks | Supabase tables |
@@ -115,12 +126,14 @@ The connection comes from `SUPABASE_DB_URL`, or from `SUPABASE_PROJECT_REF` + `S
 
 ## 6. Scheduled workflow
 
-`.github/workflows/update-datasets.yml` runs every day at 00:00 Philippine time. The cron is `0 16 * * *` because
+`.github/workflows/update-datasets.yml` runs every day at 20:00 Philippine time. The cron is `0 12 * * *` because
 GitHub uses UTC and the Philippines (UTC+8) has no daylight saving. GitHub can start scheduled runs a few minutes late.
 It can also be started by hand with **Run workflow** (`workflow_dispatch`).
 
-Steps: install `pandas`, `httpx`, `psycopg[binary]` and `python-dotenv`; fetch new days; append to Supabase; commit the changed CSV files.
-Runs never overlap (`concurrency`) and are cut off after 30 minutes.
+Steps: install `pandas`, `httpx`, `psycopg[binary]` and `python-dotenv`; run `update_supabase_from_open_meteo.py` with
+yesterday (Manila time) as the end date, so only finished days are stored, and `--refresh-days 7`, so the last 7 days are fetched again and replaced. A failed attempt is retried twice, two minutes
+apart. Runs never overlap (`concurrency`) and are cut off after 30 minutes. The job only reads the repository
+(`contents: read`) and commits nothing.
 
 ### Setup
 
@@ -134,12 +147,11 @@ Add these repository secrets (Settings, Secrets and variables, Actions):
 
 The workflow file must be on the repository's default branch for the schedule to run.
 
-### Commit-back step
+### If a run fails
 
-The last step commits the two daily CSVs and pushes them with the built-in `GITHUB_TOKEN` (`contents: write`).
-Without it the runner would start from the repository's old copy and request a longer gap every day, until the call cap is hit.
-If branch protection blocks the push, either allow the Actions bot to bypass it or remove that step and run the fetch locally.
-If the sync fails, nothing is committed, so the next run fetches the same days again.
+Nothing is written when a run fails (both tables are written in one transaction), and the next run fetches the same days
+again. Open the failed run in the Actions tab, read the log of the "Update Supabase from Open-Meteo" step, and use
+**Re-run failed jobs** once the cause (for example an Open-Meteo limit) has cleared.
 
 ## 7. Reading the data in the weather agent
 

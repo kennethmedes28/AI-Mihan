@@ -89,6 +89,13 @@ ARCHIVE_DAILY_COLUMNS = {
     "wind_speed_10m_max": "wind_speed_10m_max_kmh",
     "wind_gusts_10m_max": "wind_gusts_10m_max_kmh",
 }
+# Decimal places kept for each weather column (the same in the CSV files and in Supabase).
+WEATHER_ROUNDING = {
+    "precipitation_sum_mm": 1, "temperature_2m_max_c": 1, "temperature_2m_min_c": 1,
+    "shortwave_radiation_sum_mjm2": 2, "wind_speed_10m_max_kmh": 1, "wind_gusts_10m_max_kmh": 1,
+    "temperature_2m_max_from_hourly_c": 1, "temperature_2m_min_from_hourly_c": 1,
+    "river_discharge_m3s": 2,
+}
 WET_DAY_MM = 1.0  # a day counts as wet from 1 mm of rain (matches the existing wet_streak_days)
 
 
@@ -409,12 +416,7 @@ def main() -> None:
         print("Open-Meteo has no new complete days yet. Nothing written.")
         return
 
-    new_weather = new_days[weather_columns].round({
-        "precipitation_sum_mm": 1, "temperature_2m_max_c": 1, "temperature_2m_min_c": 1,
-        "shortwave_radiation_sum_mjm2": 2, "wind_speed_10m_max_kmh": 1, "wind_gusts_10m_max_kmh": 1,
-        "temperature_2m_max_from_hourly_c": 1, "temperature_2m_min_from_hourly_c": 1,
-        "river_discharge_m3s": 2,
-    })
+    new_weather = new_days[weather_columns].round(WEATHER_ROUNDING)
     hourly_columns = new_days[["location_id", "date", "rain_max_1h_mm", "rain_max_3h_mm", "rain_max_6h_mm"]].round(1)
     new_features = build_new_features(pd.concat([weather, new_weather], ignore_index=True), new_weather,
                                       hourly_columns, locations, feature_columns)
