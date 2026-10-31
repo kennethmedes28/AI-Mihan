@@ -70,6 +70,8 @@ class ChatResponse(BaseModel):
     reply: str
     # True when the reply is the fixed "I am not confident enough" text, so the app can style it differently.
     safe_answer: bool
+    # True when the message was stopped before any processing (it held a secret, or tried to change the assistant's rules).
+    blocked: bool = False
 
 
 # --- Places in reports and requests ----------------------------------------------------------

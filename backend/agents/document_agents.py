@@ -27,6 +27,7 @@ Example:
 """
 
 import logging
+import re
 from dataclasses import replace
 
 from langchain_core.language_models import BaseChatModel
@@ -142,6 +143,29 @@ def format_sources(chunks: list[Chunk]) -> str:
     return "\n\n".join(lines)
 
 
+def format_source_list(chunks: list[Chunk], answer: str) -> str:
+    """List the documents behind the answer, so "[3]" in the text can be looked up.
+
+    Only the sources the answer cites are listed. When it cites none (for example "I have no
+    verified information"), nothing is listed: the model did not rely on them.
+    """
+    cited = sorted({int(number) for number in re.findall(r"\[(\d+)\]", answer)})
+    lines = []
+    for number in cited:
+        if not 1 <= number <= len(chunks):
+            continue
+        metadata = chunks[number - 1].metadata
+        page = metadata.get("page")
+        label_parts = [
+            metadata.get("title") or metadata.get("source"),
+            metadata.get("agency"),
+            (metadata.get("issued_at") or "")[:10],
+            f"page {page}" if page else None,
+        ]
+        lines.append(f"[{number}] " + ", ".join(str(part) for part in label_parts if part))
+    return "Sources / Mga pinagkunan:\n" + "\n".join(lines) if lines else ""
+
+
 @traced_agent("document_agent")
 def answer_document_question(
     question: str,
@@ -192,5 +216,8 @@ def answer_document_question(
         return AgentReply(text=MODEL_ERROR_ANSWER)
 
     if answer.strip():
+        source_list = format_source_list(sources, answer)
+        if source_list:
+            answer = f"{answer.rstrip()}\n\n{source_list}"
         answer_cache.set(cache_key, answer)
     return AgentReply(text=answer)

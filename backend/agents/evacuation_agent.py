@@ -15,7 +15,7 @@ import logging
 from agents.flood_risk_agent import assess_flood_risk
 from agents.flood_types import AgentReply, ChatContext, FloodZone, Location, PRECISION_CITY
 from agents.flood_zones import collect_zones
-from langgraph_orchestrator.intents import EVACUATION, classify_intent
+from langgraph_orchestrator.intents import EMERGENCY, EVACUATION, classify_intent
 from agents.location_agent import (
     ASK_FOR_LOCATION,
     ASK_FOR_PLACE,
@@ -41,8 +41,7 @@ NO_DATABASE_ANSWER = (
 # Phrases that mean the user is already in the flood. Then there is no time for a question:
 # the centers are listed straight away.
 URGENT_PHRASES = [
-    "hanggang tuhod", "hanggang baywang", "hanggang bewang", "hanggang dibdib", "hanggang leeg",
-    "knee deep", "knee-deep", "waist deep", "waist-deep", "chest deep", "neck deep",
+    "hanggang tuhod", "up to my knee", "up to the knee", "knee deep", "knee-deep",
     "baha ngayon", "bumabaha na", "tumataas ang tubig", "rising water", "water is rising",
     "stranded", "trapped", "naipit", "nasa bubong", "tulong", "help",
 ]
@@ -58,9 +57,23 @@ URGENT_SAFETY = (
 
 
 def sounds_urgent(question: str) -> bool:
-    """True when the message says the user is in the flood right now."""
+    """True when the message says the user is in the flood right now.
+
+    Knee-deep and the phrases above count, and so does everything the router treats as an
+    emergency (thigh-, waist- or chest-deep water, a rooftop, "trapped").
+    """
     lowered = question.lower()
-    return any(phrase in lowered for phrase in URGENT_PHRASES)
+    return classify_intent(question) == EMERGENCY or any(phrase in lowered for phrase in URGENT_PHRASES)
+
+
+def safety_first(question: str, context: ChatContext) -> str:
+    """The urgent safety steps and a blank line, when the user is in the flood and has not been told yet.
+
+    The emergency node sets ``context.extra["safety_shown"]`` after it has printed the 911 text itself.
+    """
+    if sounds_urgent(question) and not context.extra.get("safety_shown"):
+        return URGENT_SAFETY + "\n\n"
+    return ""
 
 
 def should_ask_for_place(question: str, found: Location | None, context: ChatContext) -> bool:
@@ -134,7 +147,8 @@ def answer_evacuation_question(question: str, context: ChatContext) -> AgentRepl
     found = resolve_location(question)
     origin = found or context.location
     if origin is None:
-        return AgentReply(text=ASK_FOR_LOCATION, pending_intent="evacuation")
+        # Safety steps come before the question: someone in the flood must not wait for an answer to be told to call 911.
+        return AgentReply(text=safety_first(question, context) + ASK_FOR_LOCATION, pending_intent="evacuation")
     if should_ask_for_place(question, found, context):
         return AgentReply(
             text=ASK_FOR_PLACE.format(city=origin.city.title()), location=origin, pending_intent="evacuation"
@@ -164,7 +178,7 @@ def answer_evacuation_question(question: str, context: ChatContext) -> AgentRepl
         )
 
     urgent = sounds_urgent(question)
-    lines = [URGENT_SAFETY, ""] if urgent else []
+    lines = [URGENT_SAFETY, ""] if safety_first(question, context) else []
     if urgent:
         # The user's own report beats the forecast: do not label the area "LOW" next to "the flood is knee-deep".
         lines.append(f"Nearest evacuation centers to {origin.name} (you report flooding now; forecast risk: {risk.level.upper()}):")

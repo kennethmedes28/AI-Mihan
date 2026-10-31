@@ -40,6 +40,8 @@ backend/
   main.py                 # entry point: `uvicorn main:app` (the app is built in src/api/app.py)
   agents/                 # one module per flood agent (section 5)
     contacts_agent.py       hotlines for a city, copied from the CSV (no model)
+    coverage_agent.py       "not covered" reply and national hotlines for a place outside Metro Manila (no model)
+    flood_duration_agent.py "how long will the flood last?": 24-hour rain and tide outlook, no predicted duration (no model)
     document_agents.py      flood questions answered from stored documents (RAG)
     evacuation_agent.py     nearest evacuation centers that are not flooded
     flood_risk_agent.py     rule-based risk level from rain, river and PAGASA data

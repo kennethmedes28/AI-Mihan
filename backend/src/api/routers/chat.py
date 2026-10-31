@@ -34,4 +34,4 @@ async def chat(body: ChatRequest, graph=Depends(get_graph)) -> ChatResponse:
         logger.exception("Chat failed for thread %s", thread_id)
         raise HTTPException(status_code=502, detail=DATABASE_UNAVAILABLE)
 
-    return ChatResponse(thread_id=thread_id, reply=reply.text, safe_answer=reply.safe_answer)
+    return ChatResponse(thread_id=thread_id, reply=reply.text, safe_answer=reply.safe_answer, blocked=reply.blocked)

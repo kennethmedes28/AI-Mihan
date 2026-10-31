@@ -1,10 +1,13 @@
 """The chat graph: routes each message to the right flood agent.
 
-    START --> (route by keywords) --+--> emergency    fixed reply + local hotlines, no model call
+    START --> (route by keywords) --+--> emergency    fixed reply + local hotlines, then the rest of the message
+                                    |                 (save the report, list centers, answer "how long"); no model call
                                     +--> report       save a community flood report
                                     +--> route        route to an evacuation center that avoids floods
                                     +--> evacuation   nearest evacuation centers that are not flooded
                                     +--> contacts     hotlines for the user's city
+                                    +--> duration     "how long will the flood last?": rain and tide, and what cannot be known
+                                    +--> outside      a place outside Metro Manila: not covered, national numbers
                                     +--> location    a place name alone ("Marikina") sets where the user is
                                     +--> flood_risk   rule-based flood risk for a city
                                     +--> weather      PAGASA + Open-Meteo
@@ -54,14 +57,17 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
 from agents.contacts_agent import answer_contacts_question, format_contacts
+from agents.coverage_agent import answer_outside_coverage, outside_coverage_text
 from agents.document_agents import answer_document_question
 from agents.evacuation_agent import answer_evacuation_question
 from agents.flood_media_agent import answer_flood_media_question
+from agents.flood_duration_agent import answer_duration_question
 from agents.flood_risk_agent import answer_flood_risk_question
 from agents.flood_types import AgentReply, ChatContext, Location
 from agents.location_agent import (
     ASK_FOR_LOCATION,
     answer_location_message,
+    find_outside_place,
     location_from_coordinates,
     mentions_place,
     resolve_location,
@@ -72,6 +78,7 @@ from agents.route_agent import answer_route_question
 from agents.weather_agent import answer_weather_question
 from langgraph_orchestrator.intents import (
     CONTACTS,
+    DURATION,
     EMERGENCY,
     EVACUATION,
     FLOOD_RISK,
@@ -85,6 +92,7 @@ from langgraph_orchestrator.intents import (
     split_by_intent,
 )
 from src.rag.retriever import HybridRetriever
+from utils.input_guard import blocked_reply, check_message
 from video.sam_client import ImageInput, VideoInput
 
 logger = logging.getLogger(__name__)
@@ -101,9 +109,12 @@ DOCUMENTS_NODE = "documents"
 LOCATION_NODE = "location"
 FLOOD_MEDIA_NODE = "flood_media"
 MULTI_NODE = "multi"
+DURATION_NODE = "duration"
+OUTSIDE_NODE = "outside"
 ALL_NODES = [
     EMERGENCY_NODE, REPORT_NODE, ROUTE_NODE, EVACUATION_NODE,
     CONTACTS_NODE, FLOOD_RISK_NODE, WEATHER_NODE, DOCUMENTS_NODE, LOCATION_NODE, FLOOD_MEDIA_NODE, MULTI_NODE,
+    DURATION_NODE, OUTSIDE_NODE,
 ]
 
 # Which node answers each intent. Preparedness and anything unrecognised go to the documents.
@@ -114,21 +125,28 @@ NODE_FOR_INTENT = {
     EVACUATION: EVACUATION_NODE,
     CONTACTS: CONTACTS_NODE,
     FLOOD_RISK: FLOOD_RISK_NODE,
+    DURATION: DURATION_NODE,
     WEATHER: WEATHER_NODE,
     PREPAREDNESS: DOCUMENTS_NODE,
     MULTI: MULTI_NODE,  # only reached as a waiting question; new multi-topic messages are detected in route_message
 }
 
 # Topics whose agents need to know where the user is.
-TOPICS_NEEDING_LOCATION = {FLOOD_RISK, EVACUATION, ROUTE, CONTACTS}
+TOPICS_NEEDING_LOCATION = {REPORT, FLOOD_RISK, EVACUATION, ROUTE, DURATION, CONTACTS}
+
+# These topics have no data outside Metro Manila. Weather and preparedness do not depend on the city,
+# so a message about them is still answered even when it names a place outside Metro Manila.
+TOPICS_OUTSIDE_COVERAGE_STILL_ANSWERED = {WEATHER, PREPAREDNESS}
 
 # Heading above each topic's answer in a combined reply.
 TOPIC_HEADINGS = {
+    REPORT: "Flood report / Ulat ng baha",
     WEATHER: "Weather forecast / Lagay ng panahon",
     FLOOD_RISK: "Flood risk / Panganib ng baha",
     PREPAREDNESS: "What to do / Ano ang gagawin",
     EVACUATION: "Evacuation center",
     ROUTE: "Route / Ruta",
+    DURATION: "How long / Gaano katagal",
     CONTACTS: "Hotlines",
 }
 
@@ -223,10 +241,12 @@ def route_message(state: ChatState) -> str:
 
     1. An emergency always wins.
     2. A message with a photo or video attached goes to the media check.
-    3. A message that is only a place ("Marikina") goes back to the agent that
+    3. A message that names a place outside Metro Manila gets the "not covered" reply
+       (weather and preparedness questions do not depend on the city and are still answered).
+    4. A message that is only a place ("Marikina") goes back to the agent that
        asked for one, or sets the user's location if none was waiting.
-    4. A message with two or more topics goes to the multi node, which answers each one.
-    5. Anything else goes by its keywords. A message with its own topic is
+    5. A message with two or more topics (a report counts as one) goes to the multi node, which answers each one.
+    6. Anything else goes by its keywords. A message with its own topic is
        never hijacked by a waiting question: "hotline Pasig" is about hotlines
        even if the evacuation agent was waiting for a city.
     """
@@ -237,6 +257,9 @@ def route_message(state: ChatState) -> str:
 
     if state.get("media"):
         return FLOOD_MEDIA_NODE
+
+    if find_outside_place(question) and intent not in TOPICS_OUTSIDE_COVERAGE_STILL_ANSWERED:
+        return OUTSIDE_NODE
 
     if intent == GENERAL and mentions_place(question):
         pending = state.get("pending_intent")
@@ -328,19 +351,53 @@ def build_graph(
             reply = AgentReply(text=ERROR_ANSWER)
         return {**state_update(reply), "pending_intent": None}
 
-    def emergency(question: str, context: ChatContext) -> AgentReply:
-        """The fixed emergency text, plus local numbers when the city is known."""
-        place = resolve_location(question) or context.location
+    def emergency_reply(state: ChatState) -> AgentReply:
+        """The fixed emergency text first, then the rest of the message.
+
+        The 911 text and local numbers never wait for anything else. After them, whatever else
+        the message asked is answered by the same agents as any other message: a flood report is
+        saved, the nearest centers are listed, "how long will it last?" gets its answer. A place
+        outside Metro Manila gets the national numbers and a plain "not covered".
+        """
+        question = last_question(state)
+        outside_place = find_outside_place(question)
+        if outside_place:
+            return AgentReply(text=f"{EMERGENCY_ANSWER}\n\n{outside_coverage_text(outside_place)}")
+
+        place = resolve_location(question) or Location.from_dict(state.get("location"))
         text = EMERGENCY_ANSWER + ("\n\n" + format_contacts(place.city) if place else "")
-        return AgentReply(text=text, location=place)
+
+        parts = split_by_intent(question, min_topics=1, in_emergency=True)
+        if not parts:
+            return AgentReply(text=text, location=place)
+
+        # The 911 text is already above, so the evacuation agent must not repeat its own safety steps.
+        rest = multi_reply(state, parts, extra={"safety_shown": True})
+        if rest.text != ERROR_ANSWER:
+            text = f"{text}\n\n{rest.text}"
+        return replace(rest, text=text, location=rest.location or place)
+
+    def emergency_node(state: ChatState) -> dict:
+        """The emergency node. If anything after the fixed text fails, the fixed text alone is still sent."""
+        try:
+            reply = emergency_reply(state)
+        except Exception as error:
+            logger.exception("Emergency answer failed: %s", error)
+            reply = AgentReply(text=EMERGENCY_ANSWER)
+        return state_update(reply)
 
     def answer_from_documents(question: str, context: ChatContext) -> AgentReply:
         if retriever is None:
             return safe_reply()  # nothing to search, so do not guess
         return answer_document_question(question, llm, retriever)
 
-    def multi_reply(state: ChatState) -> AgentReply:
+    def multi_reply(
+        state: ChatState, parts: list[tuple[str, str]] | None = None, extra: dict | None = None
+    ) -> AgentReply:
         """Answer every topic of a multi-topic message and join the answers under headings.
+
+        ``parts`` and ``extra`` are for the emergency node, which has already split the message
+        and passes notes to the agents through ``ChatContext.extra``.
 
         The topics run at the same time (the weather and document agents each call the
         model, so this saves most of the waiting). A topic that needs the user's location
@@ -349,10 +406,13 @@ def build_graph(
         """
         question = last_question(state)
         # A new message is split afresh; a place-only reply finishes the topics left waiting.
-        parts = split_by_intent(question) or [tuple(part) for part in state.get("pending_parts") or []]
+        parts = parts or split_by_intent(question) or [tuple(part) for part in state.get("pending_parts") or []]
 
         place = resolve_location(question)
-        context = replace(make_context(state), location=place or Location.from_dict(state.get("location")))
+        base = make_context(state)
+        context = replace(
+            base, location=place or Location.from_dict(state.get("location")), extra={**base.extra, **(extra or {})}
+        )
 
         ready = [part for part in parts if context.location or part[0] not in TOPICS_NEEDING_LOCATION]
         waiting = [part for part in parts if part not in ready]
@@ -406,20 +466,24 @@ def build_graph(
 
     # Which agent answers each topic of a multi-topic message.
     topic_agents = {
+        REPORT: answer_report_request,
         WEATHER: weather_with_city,
         FLOOD_RISK: answer_flood_risk_question,
         PREPAREDNESS: answer_from_documents,
         EVACUATION: answer_evacuation_question,
         ROUTE: answer_route_question,
+        DURATION: answer_duration_question,
         CONTACTS: answer_contacts_question,
     }
 
     graph = StateGraph(ChatState)
-    graph.add_node(EMERGENCY_NODE, agent_node(emergency))
+    graph.add_node(EMERGENCY_NODE, emergency_node)
     graph.add_node(REPORT_NODE, agent_node(answer_report_request))
     graph.add_node(ROUTE_NODE, agent_node(answer_route_question))
     graph.add_node(EVACUATION_NODE, agent_node(answer_evacuation_question))
     graph.add_node(CONTACTS_NODE, agent_node(answer_contacts_question))
+    graph.add_node(DURATION_NODE, agent_node(answer_duration_question))
+    graph.add_node(OUTSIDE_NODE, agent_node(answer_outside_coverage))
     graph.add_node(FLOOD_RISK_NODE, agent_node(answer_flood_risk_question))
     graph.add_node(LOCATION_NODE, agent_node(answer_location_message))
     graph.add_node(WEATHER_NODE, agent_node(lambda question, context: answer_weather_question(question, llm)))
@@ -440,6 +504,7 @@ class ChatReply:
 
     text: str
     safe_answer: bool = False
+    blocked: bool = False  # True when the guard stopped the message before the graph ran (see utils/input_guard.py)
 
 
 async def ask(
@@ -463,6 +528,13 @@ async def ask_reply(
     ``question`` is replaced by a default one. Set the dictionary yourself on the server (for example after
     saving an upload into the upload folder), never straight from what a user typed.
     """
+    # First of all, before the graph, the database or any model: a message with a secret in it or an attempt
+    # to change the assistant's rules costs nothing and is not saved in the conversation.
+    blocked_category = check_message(question)
+    if blocked_category:
+        logger.warning("Blocked a %s message in thread %s", blocked_category, thread_id)  # never the text itself
+        return ChatReply(text=blocked_reply(blocked_category), blocked=True)
+
     config = {
         "configurable": {"thread_id": thread_id},
         # LangSmith: a readable name, a filter tag, and the conversation id to group the runs of one chat.

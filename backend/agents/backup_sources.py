@@ -22,9 +22,10 @@ Example:
 
 import contextvars
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -54,6 +55,19 @@ ERROR_PAGE_PHRASES = [
     "service unavailable",
     "bad gateway",
 ]
+
+# A bulletin issued longer ago than this is out of date. PAGASA issues forecasts at least twice a day and
+# cyclone bulletins every few hours, so a day-old bulletin no longer describes the weather.
+MAX_BULLETIN_AGE = timedelta(hours=24)
+
+MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+MONTH_NAMES = "|".join(MONTHS)
+# Words that introduce the issue time in a bulletin: "Issued at 5:00 PM, 31 October 2026", "as of ...".
+ISSUE_MARKER = re.compile(r"\b(?:issued|as of|updated)\b[^0-9a-z]{0,6}(?:at|on)?", re.IGNORECASE)
+DAY_FIRST_DATE = re.compile(rf"(\d{{1,2}})\s+({MONTH_NAMES})\s+(\d{{4}})", re.IGNORECASE)
+MONTH_FIRST_DATE = re.compile(rf"({MONTH_NAMES})\s+(\d{{1,2}}),?\s+(\d{{4}})", re.IGNORECASE)
+CLOCK_TIME = re.compile(r"(\d{1,2}):(\d{2})\s*([ap])\.?m", re.IGNORECASE)
+ISSUE_WINDOW_CHARS = 60  # how far after the marker the date and time are looked for
 
 # --- Rules of thumb for the backup readings (tune against past floods) ------
 
@@ -90,22 +104,79 @@ class BackupData:
 # ---------------------------------------------------------------- PAGASA check
 
 
-def is_pagasa_reliable(pages: list[dict] | None) -> bool:
-    """True when the PAGASA pages look like a real bulletin.
+def find_issue_time(text: str) -> datetime | None:
+    """The newest issue time written in a bulletin ("Issued at 5:00 PM, 31 October 2026"), in Manila time.
+
+    Only dates that follow "issued", "as of" or "updated" count, so a date mentioned in the body
+    (a past typhoon) is not mistaken for the issue time. A date with no clock time counts as the
+    end of that day, which errs towards trusting the bulletin. Returns None when no issue time is written.
+    """
+    found: list[datetime] = []
+    for marker in ISSUE_MARKER.finditer(text):
+        window = text[marker.start(): marker.end() + ISSUE_WINDOW_CHARS]
+        date_match = DAY_FIRST_DATE.search(window)
+        if date_match:
+            day, month, year = date_match.groups()
+        else:
+            date_match = MONTH_FIRST_DATE.search(window)
+            if not date_match:
+                continue
+            month, day, year = date_match.groups()
+
+        hour, minute = 23, 59
+        clock = CLOCK_TIME.search(window)
+        if clock:
+            hour, minute = int(clock.group(1)) % 12, int(clock.group(2))
+            if clock.group(3).lower() == "p":
+                hour += 12
+        try:
+            found.append(datetime(int(year), MONTHS.index(month.lower()) + 1, int(day), hour, minute, tzinfo=PHILIPPINE_TZ))
+        except ValueError:  # "31 February" or an hour that does not exist: not a real date
+            continue
+    return max(found) if found else None
+
+
+def is_bulletin_stale(text: str, now: datetime | None = None) -> bool:
+    """True when the bulletin says it was issued more than ``MAX_BULLETIN_AGE`` ago.
+
+    A bulletin that writes no issue time cannot be judged and is not called stale.
+    """
+    issued = find_issue_time(text)
+    now = now or datetime.now(PHILIPPINE_TZ)
+    return issued is not None and now - issued > MAX_BULLETIN_AGE
+
+
+def is_usable_bulletin(page: dict, now: datetime | None = None) -> bool:
+    """True when one PAGASA page is long enough, is not a block/error page, and is not out of date."""
+    text = page.get("text", "")
+    lowered = text.lower()
+    return (
+        len(text.strip()) >= MIN_PAGASA_CHARS
+        and not any(phrase in lowered for phrase in ERROR_PAGE_PHRASES)
+        and not is_bulletin_stale(text, now)
+    )
+
+
+def is_pagasa_reliable(pages: list[dict] | None, now: datetime | None = None) -> bool:
+    """True when the PAGASA pages look like a real, current bulletin.
 
     Empty, very short, or block/error pages (for example a "Just a moment..."
-    challenge page) are not reliable.
+    challenge page) are not reliable, and neither is a bulletin whose issue
+    time is more than a day old.
     """
-    if not pages:
-        return False
-    for page in pages:
+    return any(is_usable_bulletin(page, now) for page in pages or [])
+
+
+def pagasa_missing_reason(pages: list[dict] | None, now: datetime | None = None) -> str:
+    """Name for the missing bulletin in an answer: "out of date" when a long, clean page was too old."""
+    for page in pages or []:
         text = page.get("text", "")
-        lowered = text.lower()
-        if len(text.strip()) >= MIN_PAGASA_CHARS and not any(
-            phrase in lowered for phrase in ERROR_PAGE_PHRASES
-        ):
-            return True
-    return False
+        looks_real = len(text.strip()) >= MIN_PAGASA_CHARS and not any(
+            phrase in text.lower() for phrase in ERROR_PAGE_PHRASES
+        )
+        if looks_real and is_bulletin_stale(text, now):
+            return "PAGASA bulletin (out of date)"
+    return "PAGASA bulletin"
 
 
 # ---------------------------------------------------------------- the backup readings

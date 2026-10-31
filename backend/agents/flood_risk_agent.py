@@ -44,7 +44,13 @@ from agents.flood_types import (
     AgentReply,
     ChatContext,
 )
-from agents.backup_sources import BackupData, enough_readings, gather_backup_sources, is_pagasa_reliable
+from agents.backup_sources import (
+    BackupData,
+    enough_readings,
+    gather_backup_sources,
+    is_pagasa_reliable,
+    pagasa_missing_reason,
+)
 from agents.location_agent import ASK_FOR_LOCATION, find_city
 from agents.safe_answer import safe_reply
 from src.rag.models import PHILIPPINE_TZ
@@ -351,14 +357,14 @@ def answer_flood_risk_question(question: str, context: ChatContext) -> AgentRepl
         logger.warning("PAGASA pages unavailable: %s", error)
         pages = []
 
-    pagasa_ok = is_pagasa_reliable(pages)
+    pagasa_ok = is_pagasa_reliable(pages, context.now)
     pagasa_text = " ".join(page["text"] for page in pages) if pagasa_ok else ""
     risk = assess_flood_risk(city, pagasa_text, now=context.now)
     if pagasa_ok:
         return AgentReply(text=format_risk(risk))
 
     # PAGASA is empty or unreliable: use the backup sources, then decide if that is enough.
-    risk.missing.append("PAGASA bulletin")
+    risk.missing.append(pagasa_missing_reason(pages, context.now))
     now = context.now or datetime.now(PHILIPPINE_TZ)
     lat, lng = NCR_LOCATIONS[city]
     backups = gather_backup_sources(city, lat, lng, now)

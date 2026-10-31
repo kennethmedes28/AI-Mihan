@@ -14,9 +14,13 @@ Example:
     location = resolve_location("Nasa Brgy. Nangka, Marikina ako")
 """
 
+import csv
 import logging
+import os
 import re
 import unicodedata
+from functools import lru_cache
+from pathlib import Path
 from typing import Callable
 
 import httpx
@@ -59,6 +63,29 @@ PLACE_STOP_WORDS = {
 
 # Rough bounding box of Metro Manila: west, south, east, north.
 NCR_BOUNDS = (120.90, 14.35, 121.20, 14.80)
+
+# Places outside Metro Manila that people are likely to name, written without accents. We have no flood data
+# or evacuation list for them, so a message that names one gets a clear "not covered" reply instead of a
+# repeated "which city?". Names that are also common in Metro Manila (Santa Rosa, San Pedro, Quezon) are left out.
+OUTSIDE_NCR_PLACES = [
+    # provinces and regions
+    "cavite", "laguna", "rizal", "bulacan", "batangas", "pampanga", "bataan", "nueva ecija", "tarlac", "zambales",
+    "pangasinan", "bicol", "albay", "leyte", "samar", "mindoro", "palawan", "isabela", "cagayan", "ilocos",
+    "cebu", "davao", "iloilo", "baguio",
+    # towns and cities next to Metro Manila
+    "tanza", "bacoor", "imus", "dasmarinas", "kawit", "noveleta", "general trias", "trece martires", "silang",
+    "carmona", "tagaytay", "naic", "antipolo", "cainta", "taytay", "angono", "binangonan", "montalban",
+    "san jose del monte", "meycauayan", "marilao", "bocaue", "balagtas", "guiguinto", "malolos", "obando",
+    "calamba", "binan", "cabuyao", "los banos",
+]
+# "Rizal Avenue" and "Rizal Park" are streets and places in Manila, not the province.
+OUTSIDE_NCR_PATTERN = re.compile(
+    r"\b(" + "|".join(re.escape(name) for name in OUTSIDE_NCR_PLACES) + r")\b"
+    r"(?!\s+(?:avenue|ave|street|st|park|boulevard|blvd|hospital|medical|memorial|stadium))"
+)
+
+# Barangay names per city, taken from the evacuation-center list (the only barangay list in the project).
+CENTERS_CSV = Path(__file__).resolve().parents[2] / "corpus" / "ncr_evacuation_centers.csv"
 
 ASK_FOR_LOCATION = (
     "Which city or barangay are you in? Example: \"Brgy. Nangka, Marikina\". "
@@ -163,6 +190,42 @@ def find_barangay(text: str) -> str | None:
     return match.group(1).strip(" .") if match else None
 
 
+def find_outside_place(text: str) -> str | None:
+    """Return the name of a place outside Metro Manila that the text names, or None.
+
+    A Metro Manila city or in-range coordinates in the same message win: "from Antipolo to Marikina"
+    is a Marikina question. Coordinates outside Metro Manila count as an outside place too.
+    """
+    if find_city(text) or find_coordinates(text):
+        return None
+    if COORDINATES_PATTERN.search(text):
+        return "those coordinates"
+    found = OUTSIDE_NCR_PATTERN.search(plain_text(text))
+    return found.group(1).title() if found else None
+
+
+@lru_cache(maxsize=1)
+def load_known_barangays() -> dict[str, set[str]]:
+    """Read ``{city: {barangay names, accent-free lower case}}`` from the evacuation-center CSV (empty if missing)."""
+    path = Path(os.getenv("EVACUATION_CENTERS_CSV", CENTERS_CSV))
+    if not path.exists():
+        return {}
+    barangays: dict[str, set[str]] = {}
+    with open(path, newline="", encoding="utf-8-sig") as file:
+        for row in csv.DictReader(file):
+            city = city_key(row["city"].replace(" City", ""))
+            name = re.sub(r"^(?:barangay|brgy\.?)\s+", "", plain_text(row["barangay"]).strip())
+            if name:
+                barangays.setdefault(city, set()).add(name)
+    return barangays
+
+
+def barangay_in(phrase: str, city: str) -> str | None:
+    """The barangay name when ``phrase`` is exactly a known barangay of the city ("tambo" in Parañaque), else None."""
+    name = plain_text(phrase).strip()
+    return name.title() if name in load_known_barangays().get(city, set()) else None
+
+
 def mentions_place(text: str) -> bool:
     """Cheap check (no network) for whether the text names a place that ``resolve_location`` can use."""
     return bool(find_coordinates(text) or find_city(text) or find_barangay(text))
@@ -224,12 +287,14 @@ def resolve_place_near_city(
     for phrase in words_next_to_city(text):
         found = geocoder(f"{phrase.title()}, {city.title()}")
         if found and haversine_m(city_lat, city_lng, *found) <= MAX_PLACE_DISTANCE_M:
+            barangay = barangay_in(phrase, city)  # "Tambo, Parañaque" keeps "Tambo" as the barangay
             return Location(
                 name=f"{phrase.title()}, {city.title()}",
                 lat=found[0],
                 lng=found[1],
                 city=city,
-                precision=PRECISION_PLACE,
+                barangay=barangay,
+                precision=PRECISION_BARANGAY if barangay else PRECISION_PLACE,
             )
     return None
 

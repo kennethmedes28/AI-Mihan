@@ -13,7 +13,9 @@ avoids flooded streets, hotlines, and weather from PAGASA and Open-Meteo.
 When the data is missing or unreliable, it says so and gives a fixed safety answer. It does not guess.
 
 > **Status: early.** The agents, chat graph, retrieval, voice, flood-photo checks and the HTTP API are built and tested.
-> The Next.js frontend is not built yet. A Streamlit dashboard is included as a sample. See [docs/backend_architecture.md](docs/backend_architecture.md).
+> The Next.js frontend is not built yet; a Streamlit dashboard is included as a sample.
+> Before saving reports, run the table scripts once (see [Create the missing tables](#create-the-missing-tables)).
+> See [docs/backend_architecture.md](docs/backend_architecture.md).
 
 ## Why this matters
 
@@ -54,34 +56,83 @@ A person, such as a barangay or DRRMO, makes the real decisions.
 | A family preparing before a storm | Flood risk for their area, forecasts, and checklists from the preparedness manuals | Built (API and agents) |
 | A neighbour who sees a flooded street | Report it, so routes avoid it | Built; needs the `reports` table to be created |
 | Someone with a photo or video of flooding | Checks for flood water and gives a rough depth | Built (API and agents) |
-| Barangay and DRRMO staff | A live list of reports, and later relief and supply requests, sorted by urgency | Planned |
+| Barangay and DRRMO staff | A live list of reports and supply requests, with verify, reject and assign | API built (`/staff`, shared key); no staff screen yet |
 | Relief volunteers | Matching needs with available supplies and centers | Planned |
 
-## What it can do
+## What you can ask
 
-| Ask about | What answers | Needs a model? |
-|---|---|---|
-| Nearest evacuation center | Centers from the database, flooded areas removed, sorted by distance | No |
-| "Will it flood?" | Rule-based level (low, watch, high, critical) from rain, river flow and PAGASA warnings | No |
-| Route to a center | Route that avoids reported and known flooded areas | No |
-| Hotlines | Numbers for the city, from a CSV | No |
-| Report a flood | Saved as an unverified community report | No |
-| Weather and forecasts | PAGASA bulletins plus Open-Meteo | Yes |
-| Preparedness and policy | Retrieval over the documents in `corpus/` | Yes |
-| Photo or video of a flood | Checks for flood water and estimates rough depth | Yes |
-| Emergencies ("trapped", "waist-deep") | Fixed reply with 911 and local hotlines | No |
+Ask in English, Filipino or a mix. Name a place (a city, a barangay, a subdivision, or share your pin) and the answer
+is built for it. These are real prompts the agents answer today.
+
+### Find safety and shelter
+
+| Ask | You get |
+|---|---|
+| `Where is the nearest evacuation center to Brgy. Nangka, Marikina?` | The 3 nearest centers that are not in a flooded area, with distance, direction and capacity |
+| `Saan ang pinakamalapit na evacuation center sa Marikina?` | It asks once for your barangay, subdivision or pin so the distances are exact; reply with `Brgy. Nangka, Marikina` to get the list |
+| `Hotline ng Pasig?` | National numbers plus your city's rescue and fire lines, copied exactly from the contacts file |
+
+### Know what is coming
+
+| Ask | You get |
+|---|---|
+| `Babaha ba sa Marikina ngayong gabi?` | A risk level (low, watch, high, critical) with the reasons: rain, river flow, soaked ground, PAGASA warnings |
+| `How long will the flood last in Marikina?` | A plain statement that nobody can predict it, plus the next 24 hours of rain and any high tide |
+| `Uulan ba bukas sa Quezon City?` | PAGASA bulletins and the Open-Meteo forecast, in a short answer |
+| `Mag forecast ka ng 7 days` | A 7-day outlook |
+
+### Prepare and understand the rules
+
+| Ask | You get |
+|---|---|
+| `Ano ang dapat ihanda bago bumaha?` | Steps and checklists from the preparedness manual, with the sources listed under the answer |
+| `What is the process of relief goods?` | What the documents say, which documents they came from, and what they do not cover |
+
+### Report and share
+
+| Ask | You get |
+|---|---|
+| `I want to report a flooded street in Brgy. Nangka, Marikina` | Saved as an unverified community report; routes avoid the spot for a few hours (once the `reports` table exists) |
+
+### In an emergency
+
+`Water is up to my waist`, `Hanggang hita na ang baha`, `Trapped kami sa bubong`, `Tulong, nalulunod kami`.
+The reply starts with the **911** text and local hotlines, with no model and no waiting. If the same message also asks
+for something, it is answered right after:
+
+> `Nasa Divisoria, Manila ako. Gusto kong mag-report ng baha hanggang baywang. Saan ako pwedeng pumunta na evacuation center at gaano katagal ang baha?`
+>
+> 911 and the Manila hotlines, then the report, the 3 nearest centers, and the "how long" answer, each under its own heading.
+
+If no place is given, it asks for one right after the safety steps, and your next message (just `Marikina`) finishes the answer.
+
+### Several questions in one message
+
+`Mag forecast ka ng 7 days at kung bumaha hanggang tuhod, ano ang gagawin ko at saan ang evacuation center?` is cut into
+a forecast, a preparedness answer and an evacuation-center question, each under its own heading. The forecast and the
+preparedness answer come at once; if it does not know where you are, it asks, and your next message (`Brgy. Nangka, Marikina`)
+finishes the centers.
+
+### Outside Metro Manila
+
+`Nasa Tanza, Cavite ako. May data ka ba ng baha?` gets a clear "not covered" reply with the national hotlines and
+what to do, instead of a guess.
 
 Most answers use fixed rules and no model, so they are fast, free per question, and the same every time.
+Only weather, preparedness and photo or video questions use a chat model.
 
 ## How an answer is chosen
 
-Messages are routed by keywords (no model call), and an emergency always wins.
+Messages are routed by keywords (no model call), and an emergency always wins. A message with several requests
+("report the flood, where is the nearest center, and how long will it last?") is cut into one question per topic, and
+each topic is answered under its own heading.
 
 ```mermaid
 flowchart LR
     M[Message] --> R{Route by keywords}
-    R -->|emergency| E[Fixed reply + hotlines]
-    R -->|evacuation, route, report, contacts, flood risk| A[Rule-based agents]
+    R -->|emergency| E[Fixed reply + hotlines, then the rest of the message]
+    R -->|place outside Metro Manila| O[Not covered + national hotlines]
+    R -->|evacuation, route, report, contacts, flood risk, how long| A[Rule-based agents]
     R -->|weather, preparedness| L[Agents with a chat model]
     R -->|photo or video| V[Flood media check]
     A --> D[(Supabase Postgres)]
@@ -90,12 +141,14 @@ flowchart LR
 
 **Where the data comes from, in order of trust:**
 
-1. PAGASA bulletin. It counts as unreliable when it is empty, very short, or a block page.
+1. PAGASA bulletin. It counts as unreliable when it is empty, very short, a block page, or says it was issued more than 24 hours ago.
 2. Backup sources, each read on its own: tide height, ground height, and the official sites (NDRRMC, Red Cross, DSWD).
 3. A fixed safety answer, when too few readings are left to say anything responsible.
 
 Locations are read from GPS coordinates, "Brgy. Name, City", or a place next to a city ("Okada, Parañaque").
-If only the city is known, the answer says distances are from the city centre.
+If only the city is known, the answer says distances are from the city centre. A place that is a known barangay
+(from the evacuation-center list) is saved as a barangay. A place outside Metro Manila (Cavite, Rizal, Bulacan, and so on)
+gets the "not covered" reply.
 
 ## Repository layout
 
@@ -164,7 +217,7 @@ For local work without the Postgres conversation store, add `CHECKPOINTER=memory
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/chat` | One message in, one reply out. Send back the returned `thread_id` to continue the conversation |
+| POST | `/chat` | One message in, one reply out. Send back the returned `thread_id` to continue the conversation. `blocked` is true when the message was stopped by the input guard |
 | POST, GET | `/reports` | Submit or list community flood reports (unverified) |
 | POST | `/requests` | Submit a supply or assistance request (write only) |
 | GET, PATCH | `/staff/...` | Staff only: summary counts, the full lists, and verifying, rejecting or assigning items. Needs `STAFF_API_KEY` |
@@ -208,15 +261,6 @@ Weather and flood-feature CSVs in `datasets/` are updated every day at 00:00 Phi
 appends new rows to Supabase (never updates or deletes), and commits the CSVs back. The workflow needs the repository
 secrets `SUPABASE_PROJECT_REF`, `SUPABASE_PASSWORD` and `SUPABASE_POOLER_HOST`. Details: [docs/dataset_updates.md](docs/dataset_updates.md).
 
-## Example questions
-
-Each message works best with one request and a named place:
-
-- `Nasa Divisoria, Manila ako. Baha hanggang tuhod. Saan ang pinakamalapit na evacuation center?`
-- `Babaha ba sa Marikina ngayong gabi?`
-- `Paano pumunta mula Brgy. Tambo, Parañaque papunta sa Baclaran Elementary School na iwas baha?`
-- `Hotline ng Pasig?`
-
 ## Safety
 
 If you or someone else is in danger, call **911** and contact your barangay or local DRRMO. Move to higher ground and
@@ -234,64 +278,23 @@ do not walk or drive through floodwater. Official sources: [pagasa.dost.gov.ph](
 - [Deployment workflow](docs/deployment_workflow_guide.md)
 - [Evaluation rubric](docs/evaluation_rubric.md) and [agent benchmarks](docs/agent_benchmarks.md)
 
-## Limitations
+## Good to know
 
-- **Coverage is Metro Manila only.** There is no flood data or evacuation list for areas outside NCR, such as Cavite.
-- **No prediction of how long a flood will last.**
-- **Distances are straight lines** and map positions are approximate. Always confirm with the barangay or local DRRMO.
-- **Reports are unverified** community input. They never override PAGASA or NDRRMC information.
-- **The risk level is a rule of thumb**, not an official warning. The thresholds should be tuned against past floods.
-- **The `reports` and `requests` tables are not created in Supabase yet.** The scripts exist in `backend/sql/` but have not been run. Until they are, reports and requests cannot be saved, and `GET /reports` returns a 503.
-- **One request per message works best.** A message that reports a flood and also asks for an evacuation center only gets the report handled.
-- **Urgency is detected from phrases** ("hanggang tuhod", "waist-deep"), not understood. Wording the lists don't include, such as "up to waist" or "hanggang hita", is treated as a normal message.
-- **A stale PAGASA bulletin still counts as reliable** if it is long and well formed. There is no check on its issue time yet.
-- **Backup sources are limited.** MMDA gauges (blocked by a site challenge), Project NOAH (a JavaScript app with no searchable text) and GPM IMERG satellite rainfall (needs a NASA login) are not used.
-- **Tide and ground-height rules are rules of thumb** (high tide at 1.2 m or more, low ground at 5 m or less) and are untuned. The tide model only covers the sea, so inland cities often have no tide data.
-- **Only the city is recorded for a typed place.** A subdivision such as "Okada, Parañaque" is found on the map, but the barangay ("Tambo") is not saved with the location.
-- **No app yet.** The API works, but there is no frontend. `/chat` returns the whole reply at once (no streaming) and no list of sources, and photos or videos cannot be sent to it yet.
-- **Staff access is one shared key.** The `/staff` endpoints let staff review reports and requests, but there are no personal accounts, so a status change does not record who made it. There is no staff screen yet, only the API.
+- It covers **Metro Manila (NCR)**. Elsewhere it says so and gives the national hotlines.
+- Distances are straight lines and map positions are approximate. **Confirm with your barangay or local DRRMO** that a center is open.
+- The risk level is a rule of thumb, not an official warning. Official warnings come from PAGASA and NDRRMC.
+- Community reports are unverified and never override official information.
+- Emergencies are recognised from a list of phrases. If you are in danger, call **911** whatever the assistant says.
+- Messages work best with one clear request and a named place.
+- **Secrets and prompt injection are blocked before anything runs.** A message that contains a password, API key, token or database address, or that tries to change the assistant's rules or asks for its keys, gets a fixed reply. It never reaches the chat model, the database or the saved conversation, so it costs no API credit, and its text is never logged. This is a pattern filter, so unusual disguises can slip through; the real protection is that keys are never placed in a prompt. See `backend/utils/input_guard.py`.
 
-## Future improvements
+## Roadmap
 
-**Make it usable**
-- Build the Next.js frontend.
-- Run the table scripts in `backend/sql/` on Supabase.
-- Stream `/chat` replies and return a list of sources with each answer; accept a photo or video on `/chat`.
-- Add a staff screen to the frontend, with a personal login per staff member so every review is attributed.
-- Add CI: backend tests and lint, frontend build, secret scanning and dependency updates.
-- Add an alert when the nightly dataset update fails, and a check that the newest CSV date is recent.
-
-**Answer better**
-- Handle a message with several requests: save the report, give safety steps, list centers, then answer the rest.
-- Widen emergency and urgency detection ("up to waist", "hanggang hita"), possibly with a model as a second check and the keywords as a floor.
-- Add the nearest centers to the emergency reply for people who also ask where to go.
-- Answer "how long will it last?" with the next 24 hours of rain and tide, and say plainly that duration cannot be predicted.
-- Keep the barangay with a place the user typed, using a list of Metro Manila barangays, and match place names against the evacuation-center table.
-- Check the issue time of PAGASA bulletins and treat old ones as unreliable.
-
-Tagalog questions it should answer better, to use as test cases for the items above:
-
-| Question | What goes wrong now | Fix needed |
-|---|---|---|
-| `Nasa Divisoria, Manila ako. Gusto kong mag-report ng baha hanggang baywang. Saan ako pwedeng pumunta na evacuation center at gaano katagal ang baha?` | Gives the 911 and hotline reply (correct), but the report is not saved, no centers are listed, and duration is not answered | Several requests in one message; add the nearest centers to the emergency reply; duration answer |
-| `Hanggang hita na ang baha. Saan ang pinakamalapit na evacuation center?` | "Hanggang hita" is not recognised as urgent, and with no place named it only asks "saang lungsod?": no 911, no safety steps | Wider emergency phrases; safety steps before any question |
-| `Gaano katagal ang baha sa Marikina?` | Answers with the forecast risk ("LOW, walang senyales ng baha"), which does not answer the question and reads as reassurance to someone already flooded | Duration answer from rain and tide, with a clear limit |
-| `Nasa Tanza, Cavite ako. May data ka ba ng baha?` | Asks "saang lungsod?" again instead of saying the area is not covered | Clear "outside coverage" reply |
-
-English questions it should answer better, to use as test cases for the items above:
-
-| Question | What goes wrong now | Fix needed |
-|---|---|---|
-| `I'm in Divisoria, Manila. I want to report a flood up to my waist. Where can I go to an evacuation center, and how long will it last?` | Only the report is handled; no safety steps, no centers, no answer about duration | Several requests in one message; wider emergency phrases; duration answer |
-| `Water is up to my waist. Where is the nearest evacuation center?` | "Up to my waist" is not recognised as an emergency, and with no place named it only asks "which city?": no 911, no safety steps | Wider emergency phrases; safety steps before any question |
-| `I'm in Tanza, Cavite. Do you have flood data?` | Asks "which city?" again instead of saying the area is not covered | Clear "outside coverage" reply |
-| `How long will the flood last in Marikina?` | Answers with the forecast risk ("LOW, no flood signal"), which does not answer the question and reads as reassurance to someone already flooded | Duration answer from rain and tide, with a clear limit |
-| `What is the process of relief goods?` | Describes what the government does, with citations that name no document | Sources list; steps a resident can take |
-
-**Cover more**
-- Extend the datasets, centers and city tables beyond NCR, starting with Cavite, Rizal and Bulacan. Until then, give a clear "outside coverage" reply with contacts instead of asking for the location again.
-- Add flood event labels (MMDA gauges, NDRRMC reports, Project NOAH hazard maps), river and dam levels, terrain and drainage layers, and satellite rainfall for better risk rules.
-- Tune the risk thresholds against past floods, and measure them with the evaluation rubric.
+- Build the Next.js frontend, with streaming replies, sources as a separate field, and photo or video upload on `/chat`.
+- Add a staff screen with a personal login per staff member, so every review is attributed.
+- Add CI (tests, lint, secret scanning) and an alert when the nightly dataset update fails.
+- Extend data beyond Metro Manila, starting with Cavite, Rizal and Bulacan.
+- Improve the risk rules with flood event labels, river and dam levels, terrain and satellite rainfall, and tune them against past floods.
 
 ## License
 
@@ -300,6 +303,6 @@ MIT. See [LICENSE](LICENSE).
 
 <footer align="center">
   <a href="frontend/public/thankyou_footer_floodgentic.jpg" target="_blank">
-    <img src="frontend/public/thankyou_footer_floodgentic.jpg" alt="Flood-Gents" width="100%">
+    <img src="frontend/public/thankyou_footer_floodgentic.jpg" alt="Flood-Gentic" width="100%">
   </a>
 </footer>
