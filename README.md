@@ -94,7 +94,7 @@ flowchart LR
 2. Backup sources, each read on its own: tide height, ground height, and the official sites (NDRRMC, Red Cross, DSWD).
 3. A fixed safety answer, when too few readings are left to say anything responsible.
 
-Locations are read from GPS coordinates, "Brgy. Name, City", or a place next to a city ("Gentry Manor, Parañaque").
+Locations are read from GPS coordinates, "Brgy. Name, City", or a place next to a city ("7-11, Tambo, Parañaque City").
 If only the city is known, the answer says distances are from the city centre.
 
 ## Repository layout
