@@ -127,3 +127,70 @@ def insert_request(
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'unverified')",
         [kind, city, barangay, details, people_count, contact_phone, lat, lng],
     )
+
+
+# --- Staff review of reports and requests --------------------------------------------------------
+# The table name is never taken from a request: it must be one of these two fixed words.
+STAFF_TABLES = ("reports", "requests")
+
+REPORT_STATUSES = ("unverified", "verified", "rejected")
+REQUEST_STATUSES = ("unverified", "verified", "assigned", "closed")
+
+
+def fetch_reports_for_staff(
+    conn, status: str | None = None, city: str | None = None, hazard: str | None = None, limit: int = 20
+) -> list[dict]:
+    """Return the newest reports with everything, including the id and position (staff only)."""
+    conditions, values = [], []
+    for column, value in (("status", status), ("city", city), ("hazard", hazard)):
+        if value:
+            conditions.append(f"{column} ILIKE %s")  # the column name is fixed text, the value is a parameter
+            values.append(value)
+    sql = _build_query(
+        "SELECT id, hazard, city, barangay, body, status, trust_level, lat, lng, created_at FROM reports",
+        conditions,
+        order_by="created_at DESC",
+        limit=limit,
+    )
+    return conn.execute(sql, values).fetchall()
+
+
+def fetch_requests_for_staff(
+    conn, status: str | None = None, city: str | None = None, kind: str | None = None, limit: int = 20
+) -> list[dict]:
+    """Return the newest requests with everything, including the contact phone (staff only)."""
+    conditions, values = [], []
+    for column, value in (("status", status), ("city", city), ("kind", kind)):
+        if value:
+            conditions.append(f"{column} ILIKE %s")
+            values.append(value)
+    sql = _build_query(
+        "SELECT id, kind, city, barangay, details, people_count, contact_phone, lat, lng, status, created_at FROM requests",
+        conditions,
+        order_by="created_at DESC",
+        limit=limit,
+    )
+    return conn.execute(sql, values).fetchall()
+
+
+def update_status(conn, table: str, row_id, status: str) -> bool:
+    """Set the status of one report or request. Returns False when there is no row with that id."""
+    if table not in STAFF_TABLES:
+        raise ValueError(f"unknown table: {table}")
+    cursor = conn.execute(f"UPDATE {table} SET status = %s WHERE id = %s", [status, row_id])
+    return cursor.rowcount > 0
+
+
+def summarize_table(conn, table: str) -> dict:
+    """Counts for monitoring: total, by status, by city, and when the oldest unverified row arrived."""
+    if table not in STAFF_TABLES:
+        raise ValueError(f"unknown table: {table}")
+    by_status = conn.execute(f"SELECT status, count(*) AS n FROM {table} GROUP BY status").fetchall()
+    by_city = conn.execute(f"SELECT city, count(*) AS n FROM {table} GROUP BY city ORDER BY n DESC").fetchall()
+    oldest = conn.execute(f"SELECT min(created_at) AS oldest FROM {table} WHERE status = 'unverified'").fetchone()
+    return {
+        "total": sum(row["n"] for row in by_status),
+        "by_status": {row["status"]: row["n"] for row in by_status},
+        "by_city": {row["city"]: row["n"] for row in by_city},
+        "oldest_unverified_at": oldest["oldest"] if oldest else None,
+    }

@@ -158,6 +158,79 @@ class AdvisoriesOut(BaseModel):
     note: str
 
 
+# --- Staff (needs the staff key) -------------------------------------------------------------
+
+ReportStatus = Literal["unverified", "verified", "rejected"]
+RequestStatus = Literal["unverified", "verified", "assigned", "closed"]
+
+
+class StaffReportOut(BaseModel):
+    """A report as staff see it: everything, with the id needed to change its status."""
+
+    id: UUID
+    hazard: str
+    city: str
+    barangay: str | None = None
+    body: str
+    status: str
+    trust_level: str
+    lat: float | None = None
+    lng: float | None = None
+    created_at: datetime
+
+
+class StaffRequestOut(BaseModel):
+    """A request as staff see it, including the contact phone number."""
+
+    id: UUID
+    kind: str
+    city: str
+    barangay: str | None = None
+    details: str
+    people_count: int | None = None
+    contact_phone: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    status: str
+    created_at: datetime
+
+
+class ReportStatusUpdate(StrictModel):
+    """The new status of a report."""
+
+    status: ReportStatus
+
+
+class RequestStatusUpdate(StrictModel):
+    """The new status of a request."""
+
+    status: RequestStatus
+
+
+class StatusChanged(BaseModel):
+    """Answer to a status change."""
+
+    id: UUID
+    status: str
+
+
+class TableSummary(BaseModel):
+    """Counts for one table, for monitoring."""
+
+    total: int
+    by_status: dict[str, int]
+    by_city: dict[str, int]
+    # When the oldest row still waiting for review arrived; None when nothing is waiting.
+    oldest_unverified_at: datetime | None = None
+
+
+class StaffSummary(BaseModel):
+    """What is waiting, at a glance."""
+
+    reports: TableSummary
+    requests: TableSummary
+
+
 # --- Health ---------------------------------------------------------------------------------
 
 

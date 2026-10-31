@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS reports (
     city        text NOT NULL,
     barangay    text,
     body        text NOT NULL,
-    status      text NOT NULL DEFAULT 'unverified',   -- unverified, verified or rejected
+    status      text NOT NULL DEFAULT 'unverified' CHECK (status IN ('unverified', 'verified', 'rejected')),
     trust_level text NOT NULL DEFAULT 'community',
     created_at  timestamptz NOT NULL DEFAULT now()
 );

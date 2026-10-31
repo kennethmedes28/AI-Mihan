@@ -11,6 +11,7 @@ Endpoints (see docs/backend_architecture.md section 4):
     GET  /evacuation-centers    search the centers
     GET  /advisories/latest     current PAGASA bulletins
     GET  /health, /health/ready what works
+    /staff/...                  review reports and requests (only when STAFF_API_KEY is set)
     WS   /ws/voice, /ws/camera  live speech-to-text and the webcam flood check
 
 Interactive documentation is served at /docs.
@@ -22,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.api.rate_limit import RateLimiter
-from src.api.routers import advisories, chat, evacuation, health, help_requests, reports
+from src.api.routers import advisories, chat, evacuation, health, help_requests, reports, staff
 from src.api.settings import Settings, load_settings
 from src.api.startup import real_services
 from video.camera_router import create_camera_router
@@ -55,6 +56,7 @@ def create_app(settings: Settings | None = None, lifespan=real_services) -> Fast
         "chat": RateLimiter(settings.chat_per_minute, window_seconds=60),
         "reports": RateLimiter(settings.reports_per_hour, window_seconds=3600),
         "requests": RateLimiter(settings.requests_per_hour, window_seconds=3600),
+        "staff": RateLimiter(settings.staff_per_minute, window_seconds=60),
     }
 
     # Browsers may call the API only from the listed origins. This does not cover the WebSockets.
@@ -67,6 +69,8 @@ def create_app(settings: Settings | None = None, lifespan=real_services) -> Fast
 
     for module in (health, chat, reports, help_requests, evacuation, advisories):
         app.include_router(module.router)
+    if settings.staff_api_key:  # without a key the staff endpoints simply do not exist
+        app.include_router(staff.router)
     app.include_router(create_voice_router())
     app.include_router(create_camera_router())
     return app

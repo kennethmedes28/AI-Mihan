@@ -4,6 +4,7 @@ The graph and the database connection are created once at start-up (``startup.py
 on ``app.state``. Tests put fakes there instead, so no router needs to know where they come from.
 """
 
+import hmac
 import logging
 from collections.abc import Callable
 
@@ -24,6 +25,24 @@ TOO_MANY_REQUESTS = (
     "Masyadong maraming request. Maghintay sandali at subukan muli. Kung nasa panganib, tumawag sa 911."
 )
 UNKNOWN_CITY = "Unknown city. Only the cities of Metro Manila (NCR) are covered, for example Manila, Quezon City or Marikina."
+
+
+STAFF_KEY_REQUIRED = "A valid staff key is required. Send it as 'Authorization: Bearer <key>'."
+
+
+def require_staff(request: Request) -> None:
+    """Allow the call only when it carries the staff key.
+
+    The key is compared in constant time, so the time taken does not hint at how much of a
+    guess was right. The answer is the same whether the header is missing or wrong.
+    """
+    expected = request.app.state.settings.staff_api_key
+    header = request.headers.get("authorization", "")
+    scheme, _, given = header.partition(" ")
+
+    key_matches = bool(expected) and scheme.lower() == "bearer" and hmac.compare_digest(given.strip().encode(), expected.encode())
+    if not key_matches:
+        raise HTTPException(status_code=401, detail=STAFF_KEY_REQUIRED, headers={"WWW-Authenticate": "Bearer"})
 
 
 def get_graph(request: Request):

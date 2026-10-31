@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS requests (
     contact_phone text,
     lat           double precision,
     lng           double precision,
-    status        text NOT NULL DEFAULT 'unverified',  -- unverified, verified, assigned or closed
+    status        text NOT NULL DEFAULT 'unverified' CHECK (status IN ('unverified', 'verified', 'assigned', 'closed')),
     created_at    timestamptz NOT NULL DEFAULT now()
 );
 

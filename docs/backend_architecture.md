@@ -3,8 +3,8 @@
 Design for the Flood-Gentic backend (FastAPI + LangGraph on Railway, data in Supabase).
 Status: **partly built**. Built: the flood agents, the LangGraph chat graph with a Postgres checkpointer, the RAG package
 (chunking, embeddings, FAISS and pgvector stores, retrieval), the FastAPI app and its routers (`src/api/`), the realtime voice WebSocket,
-and the dataset update scripts. Not built yet: streaming and a source list on `/chat`, media upload, a staff view of reports and requests,
-and a scheduled ingestion worker. Retrieval details live in `docs/ingestion_details.md`, voice in `docs/voice_chat.md`, the weather
+the staff endpoints for reviewing reports and requests, and the dataset update scripts. Not built yet: streaming and a source list on `/chat`,
+media upload, per-person staff accounts, and a scheduled ingestion worker. Retrieval details live in `docs/ingestion_details.md`, voice in `docs/voice_chat.md`, the weather
 datasets in `docs/dataset_updates.md`; this document covers everything around them.
 
 ## 1. Goals and constraints
@@ -79,7 +79,7 @@ backend/
       schemas.py            request and response models (Pydantic)
       deps.py               shared dependencies, rate-limit check and error texts
       rate_limit.py         in-memory sliding-window limiter
-      routers/              chat, reports, help_requests, evacuation, advisories, health
+      routers/              chat, reports, help_requests, evacuation, advisories, health, staff
     services/             # fetch_postgre_database.py, shared_connection.py
   tests/                  # agents, graph, voice and camera WebSockets, tracing helpers (conftest.py keeps tests out of LangSmith)
 scripts/                  # ingestion and dataset scripts (docs/dataset_updates.md)
@@ -97,6 +97,9 @@ Keep each module small and single-purpose; routers contain no business logic. Re
 | POST | `/requests` | Submit a supply / assistance request. Write only: it can hold a phone number | **Built** (needs the `requests` table) |
 | GET | `/evacuation-centers` | Search centers by city / barangay | **Built** |
 | GET | `/advisories/latest` | Current PAGASA bulletins; says plainly when they cannot be read | **Built** (national pages; `city` only marks which mention it) |
+| GET | `/staff/summary` | Counts of reports and requests by status and city, and how long the oldest unreviewed one has waited | **Built** (staff key) |
+| GET | `/staff/reports`, `/staff/requests` | The newest items in full (unredacted text, exact position, contact phone); filter by status, city, hazard or kind | **Built** (staff key) |
+| PATCH | `/staff/reports/{id}`, `/staff/requests/{id}` | Review: reports become verified or rejected; requests become verified, assigned or closed | **Built** (staff key) |
 | GET | `/health`, `/health/ready` | Dependency check; `/health/ready` is 503 unless the database and chat graph work | **Built** |
 | WS | `/ws/voice` | Live speech-to-text for the chat box, see `docs/voice_chat.md` | **Built** |
 | WS | `/ws/camera` | Webcam flood check, one frame every few seconds, see `docs/flood_media.md` | **Built** |
@@ -111,7 +114,12 @@ How the API behaves:
 - **Conversations:** `thread_id` must be a UUID. Without one, `/chat` starts a new conversation and returns the id to send back.
 - **Soft failures:** without `MUSE_API` the weather and document answers fail but everything that needs no model keeps working;
   if document search cannot start, the document agent gives the fixed safe answer.
-- **Settings:** `CORS_ORIGINS`, `CHECKPOINTER` (`postgres` or `memory`), `ENABLE_RAG`, `TRUST_PROXY_HEADERS`, `ORS_API_KEY`; see `src/api/settings.py`.
+- **Staff access:** the `/staff` endpoints exist only when `STAFF_API_KEY` is set (at least 24 characters). Every call must send
+  `Authorization: Bearer <key>`; a missing or wrong key gets the same 401. They share a rate limit (`STAFF_PER_MINUTE`) that applies before the key is checked,
+  which slows guessing. There is one shared key and no accounts, so a status change records what changed but not who changed it.
+- **Review rules:** a rejected report is hidden from `GET /reports`, from routing and from the evacuation filter. A report or request stays
+  `unverified` until a person changes it; nothing changes status on its own.
+- **Settings:** `CORS_ORIGINS`, `CHECKPOINTER` (`postgres` or `memory`), `ENABLE_RAG`, `TRUST_PROXY_HEADERS`, `STAFF_API_KEY`, `STAFF_PER_MINUTE`, `ORS_API_KEY`; see `src/api/settings.py`.
 
 Run it with `uv run uvicorn main:app --reload` and open `/docs` for the interactive documentation.
 
@@ -182,6 +190,45 @@ erDiagram
         text content_hash
         jsonb metadata
     }
+    NCR_LOCATIONS ||--o{ EVACUATION_CENTERS : "location_id"
+    NCR_LOCATIONS ||--o{ NCR_WEATHER_DAILY : "location_id"
+    NCR_LOCATIONS ||--o{ NCR_FLOOD_FEATURES_DAILY : "location_id"
+    NCR_LOCATIONS {
+        int location_id PK
+        text city
+        float latitude
+        float longitude
+        float elevation_m
+        int coord_group
+    }
+    EVACUATION_CENTERS {
+        int location_id FK
+        text city
+        text barangay
+        text name
+        text type
+        text status_in_source
+        text source
+        float latitude
+        float longitude
+        text notes
+    }
+    NCR_WEATHER_DAILY {
+        int location_id PK, FK
+        date date PK
+        float precipitation_sum_mm
+        float temperature_2m_max_c
+        float river_discharge_m3s
+    }
+    NCR_FLOOD_FEATURES_DAILY {
+        int location_id PK, FK
+        date date PK
+        float precipitation_sum_mm
+        float rain_3d_mm
+        float rain_7d_mm
+        float river_discharge_m3s
+        float discharge_pctile
+    }
     REPORTS {
         uuid id PK
         text hazard
@@ -190,6 +237,8 @@ erDiagram
         text body
         text status
         text trust_level
+        float lat
+        float lng
         timestamptz created_at
     }
     REQUESTS {
@@ -197,18 +246,13 @@ erDiagram
         text kind
         text city
         text barangay
+        text details
+        int people_count
         text contact_phone
-        text status
-        timestamptz created_at
-    }
-    EVACUATION_CENTERS {
-        uuid id PK
-        text name
-        text city
-        text barangay
-        int capacity
         float lat
         float lng
+        text status
+        timestamptz created_at
     }
     CONVERSATIONS ||--o{ MESSAGES : has
     CONVERSATIONS {
@@ -225,17 +269,41 @@ erDiagram
     }
 ```
 
+The diagram shows the columns that exist (or, for `reports` and `requests`, that the scripts in `backend/sql/` create). `DOCUMENTS`,
+`CONVERSATIONS` and `MESSAGES` are design only: see the table below. The weather and flood-feature tables are shortened to a few columns.
+
+**Joining by `location_id`.** `location_id` is the key that ties the location data together. `ncr_locations` holds one row per Metro Manila
+city (17 rows, with its elevation), and `evacuation_centers`, `ncr_weather_daily` and `ncr_flood_features_daily` all carry the same
+`location_id`. A center can therefore be joined to its city's elevation, recent rain and river flow without matching city names, which are spelled
+differently in the tables ("Parañaque City" in the centers, "Parañaque" in the locations):
+
+```sql
+SELECT e.name, e.barangay, l.elevation_m, f.rain_3d_mm, f.discharge_pctile
+FROM evacuation_centers e
+JOIN ncr_locations l USING (location_id)
+LEFT JOIN ncr_flood_features_daily f
+       ON f.location_id = e.location_id AND f.date = (SELECT max(date) FROM ncr_flood_features_daily)
+WHERE e.location_id = 4;
+```
+
+All 102 centers match one of the 17 locations. The weather and flood-feature tables enforce the link with a foreign key; `evacuation_centers`
+does not yet, so a typo there would not be caught by the database. A center is identified by `(city, barangay, name)`, which is unique; there is no
+separate `id` column and no `capacity` column.
+
+`reports` and `requests` hold the city as a text key (`"paranaque"`, `"quezon city"`), as the agents use it, not as a `location_id`. Adding a
+`location_id` to both would let them join the same way.
+
 `chunks.embedding` uses an HNSW index. Row-level security stays on for all user-facing tables.
 
 **What exists in Supabase today**
 
 | Table | State |
 |---|---|
-| `chunks` | Created and filled (359 rows, 1024-dimension vectors, HNSW index). One table keyed by `(doc_id, chunk_idx)`; there is no separate `documents` table, so source, type, trust tier, hazard, city and validity live in the `metadata` column |
+| `chunks` | Created and filled (461 rows, 1024-dimension vectors, HNSW index). One table keyed by `(doc_id, chunk_idx)`; there is no separate `documents` table, so source, type, trust tier, hazard, city and validity live in the `metadata` column |
 | `ncr_locations`, `ncr_weather_daily`, `ncr_flood_features_daily` | Created and filled by `scripts/load_to_supabase.py` and kept current by the daily workflow (`docs/dataset_updates.md`) |
-| `evacuation_centers` | Created and filled; read by the evacuation and route agents and by `GET /evacuation-centers` |
-| `reports` | Queried by the report agent, the route agent and `/reports`. The scripts `sql/000_reports.sql` then `sql/001_reports_geo.sql` create it; **they have not been run on this database yet** |
-| `requests` | Written by `POST /requests`. `sql/002_requests.sql` creates it; **not run yet** |
+| `evacuation_centers` | Created and filled (102 rows, 17 cities); joins to `ncr_locations` on `location_id`; read by the evacuation and route agents and by `GET /evacuation-centers` |
+| `reports` | **Does not exist yet.** Queried by the report agent, the route agent and `/reports`. Create it with `sql/000_reports.sql`, then `sql/001_reports_geo.sql` |
+| `requests` | **Does not exist yet.** Written by `POST /requests`. Create it with `sql/002_requests.sql` |
 | `conversations`, `messages` | Not created. Conversation state is saved by the LangGraph checkpointer instead |
 
 All the tables above have row-level security on with no policies: only the backend's direct Postgres connection can read or write them.

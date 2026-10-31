@@ -26,6 +26,7 @@ from src.api.routers import advisories as advisories_router
 from src.api.routers import evacuation as evacuation_router
 from src.api.routers import help_requests as requests_router
 from src.api.routers import reports as reports_router
+from src.api.routers import staff as staff_router
 from src.api.settings import Settings, load_settings
 
 MARIKINA_POINT = {"lat": 14.6507, "lng": 121.1029}
@@ -241,6 +242,175 @@ class RequestTests(unittest.TestCase):
     def test_requests_cannot_be_read_back(self):
         with make_client() as client:
             self.assertEqual(client.get("/requests").status_code, 405)
+
+
+STAFF_KEY = "staff-key-for-tests-0123456789abcdef"
+STAFF_HEADERS = {"Authorization": f"Bearer {STAFF_KEY}"}
+REPORT_ID = "11111111-2222-3333-4444-555555555555"
+
+
+def make_staff_client(**settings) -> TestClient:
+    """A client for an app that has the staff key set, so the /staff endpoints exist."""
+    return make_client(settings=Settings(staff_api_key=STAFF_KEY, **settings))
+
+
+class StaffAccessTests(unittest.TestCase):
+    def test_staff_endpoints_do_not_exist_without_a_key(self):
+        with make_client() as client:  # no staff key configured
+            self.assertEqual(client.get("/staff/summary", headers=STAFF_HEADERS).status_code, 404)
+            self.assertEqual(client.get("/staff/requests", headers=STAFF_HEADERS).status_code, 404)
+
+    def test_missing_wrong_and_malformed_keys_are_refused_the_same_way(self):
+        attempts = [
+            {},
+            {"Authorization": "Bearer wrong-key-wrong-key-wrong-key-12"},
+            {"Authorization": STAFF_KEY},  # no "Bearer"
+            {"Authorization": f"Basic {STAFF_KEY}"},
+            {"Authorization": "Bearer "},
+        ]
+        with make_staff_client() as client:
+            responses = [client.get("/staff/summary", headers=headers) for headers in attempts]
+        for response in responses:
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(response.headers["www-authenticate"], "Bearer")
+        self.assertEqual({response.text for response in responses}, {responses[0].text})  # nothing to tell them apart
+
+    def test_nothing_is_read_from_the_database_without_the_key(self):
+        with make_staff_client() as client, mock.patch.object(staff_router, "fetch_requests_for_staff") as fetch:
+            client.get("/staff/requests")
+        fetch.assert_not_called()
+
+    def test_repeated_calls_are_rate_limited_even_with_wrong_keys(self):
+        with make_staff_client(staff_per_minute=2) as client:
+            statuses = [client.get("/staff/summary", headers={"Authorization": "Bearer nope"}).status_code for _ in range(3)]
+        self.assertEqual(statuses, [401, 401, 429])
+
+    def test_a_short_key_stops_start_up(self):
+        with mock.patch("src.api.settings.load_dotenv"), mock.patch.dict(os.environ, {"STAFF_API_KEY": "short"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "at least 24"):
+                load_settings()
+
+    def test_public_endpoints_do_not_expose_staff_data(self):
+        with make_staff_client() as client:
+            self.assertEqual(client.get("/requests").status_code, 405)  # still write only
+            self.assertEqual(client.get("/reports", headers=STAFF_HEADERS).status_code, 503)  # public list, not the staff one
+
+
+class StaffReviewTests(unittest.TestCase):
+    REPORT = {"id": REPORT_ID, "hazard": "flood", "city": "pasig", "barangay": "Kapitolyo",
+              "body": "Call 0917 123 4567, water is waist-deep", "status": "unverified", "trust_level": "community",
+              "lat": 14.5764, "lng": 121.0851, "created_at": "2026-10-30T10:00:00+08:00"}
+    REQUEST = {"id": "99999999-8888-7777-6666-555555555555", "kind": "supply", "city": "marikina", "barangay": None,
+               "details": "Water for 12 families", "people_count": 40, "contact_phone": "+63 917 123 4567",
+               "lat": None, "lng": None, "status": "unverified", "created_at": "2026-10-30T10:05:00+08:00"}
+
+    def test_staff_see_the_full_report_unredacted(self):
+        with make_staff_client() as client, mock.patch.object(staff_router, "fetch_reports_for_staff", return_value=[self.REPORT]) as fetch:
+            response = client.get("/staff/reports", params={"status": "unverified", "city": "Pasig", "limit": 5}, headers=STAFF_HEADERS)
+        report = response.json()[0]
+        self.assertIn("0917 123 4567", report["body"])  # the public list hides this; staff need it
+        self.assertEqual((report["id"], report["lat"]), (REPORT_ID, 14.5764))
+        self.assertEqual((fetch.call_args.kwargs["status"], fetch.call_args.kwargs["city"]), ("unverified", "pasig"))
+
+    def test_staff_see_request_contact_numbers(self):
+        with make_staff_client() as client, mock.patch.object(staff_router, "fetch_requests_for_staff", return_value=[self.REQUEST]):
+            response = client.get("/staff/requests", headers=STAFF_HEADERS)
+        self.assertEqual(response.json()[0]["contact_phone"], "+63 917 123 4567")
+
+    def test_filters_are_checked(self):
+        with make_staff_client() as client:
+            for path, params in (
+                ("/staff/reports", {"status": "assigned"}),  # only requests can be assigned
+                ("/staff/requests", {"status": "rejected"}),  # only reports can be rejected
+                ("/staff/reports", {"city": "Tanza"}),
+                ("/staff/requests", {"kind": "weapons"}),
+                ("/staff/reports", {"limit": 51}),
+            ):
+                self.assertEqual(client.get(path, params=params, headers=STAFF_HEADERS).status_code, 422, (path, params))
+
+    def test_status_change(self):
+        with make_staff_client() as client, mock.patch.object(staff_router, "update_status", return_value=True) as update:
+            response = client.patch(f"/staff/reports/{REPORT_ID}", json={"status": "verified"}, headers=STAFF_HEADERS)
+            assigned = client.patch(f"/staff/requests/{REPORT_ID}", json={"status": "assigned"}, headers=STAFF_HEADERS)
+        self.assertEqual(response.json(), {"id": REPORT_ID, "status": "verified"})
+        self.assertEqual(assigned.status_code, 200)
+        self.assertEqual([call.args[1] for call in update.call_args_list], ["reports", "requests"])
+
+    def test_unknown_id_is_404_and_bad_input_is_422(self):
+        with make_staff_client() as client, mock.patch.object(staff_router, "update_status", return_value=False) as update:
+            missing = client.patch(f"/staff/reports/{REPORT_ID}", json={"status": "rejected"}, headers=STAFF_HEADERS)
+            bad_status = client.patch(f"/staff/reports/{REPORT_ID}", json={"status": "assigned"}, headers=STAFF_HEADERS)
+            bad_id = client.patch("/staff/reports/not-a-uuid", json={"status": "verified"}, headers=STAFF_HEADERS)
+            extra = client.patch(f"/staff/reports/{REPORT_ID}", json={"status": "verified", "body": "edited"}, headers=STAFF_HEADERS)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual((bad_status.status_code, bad_id.status_code, extra.status_code), (422, 422, 422))
+        update.assert_called_once()  # only the first call got as far as the database
+
+    def test_status_change_needs_the_key(self):
+        with make_staff_client() as client, mock.patch.object(staff_router, "update_status") as update:
+            response = client.patch(f"/staff/reports/{REPORT_ID}", json={"status": "verified"})
+        self.assertEqual(response.status_code, 401)
+        update.assert_not_called()
+
+    def test_summary(self):
+        counts = {"reports": {"total": 3, "by_status": {"unverified": 2, "verified": 1}, "by_city": {"pasig": 3},
+                              "oldest_unverified_at": "2026-10-30T08:00:00+08:00"},
+                  "requests": {"total": 0, "by_status": {}, "by_city": {}, "oldest_unverified_at": None}}
+        with make_staff_client() as client, mock.patch.object(staff_router, "summarize_table", side_effect=lambda conn, table: counts[table]):
+            body = client.get("/staff/summary", headers=STAFF_HEADERS).json()
+        self.assertEqual(body["reports"]["by_status"], {"unverified": 2, "verified": 1})
+        self.assertIsNone(body["requests"]["oldest_unverified_at"])
+
+    def test_database_failure_gives_503_without_details(self):
+        with make_staff_client() as client, mock.patch.object(
+            staff_router, "update_status", side_effect=RuntimeError('relation "reports" does not exist')
+        ):
+            response = client.patch(f"/staff/reports/{REPORT_ID}", json={"status": "verified"}, headers=STAFF_HEADERS)
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("relation", response.text)
+
+
+class StaffQueryTests(unittest.TestCase):
+    """The SQL helpers, with a recording connection (no real database)."""
+
+    class Recorder:
+        def __init__(self, rows=None, rowcount=1):
+            self.calls, self.rows, self.rowcount = [], rows or [], rowcount
+
+        def execute(self, sql, values=None):
+            self.calls.append((sql, values))
+            return self
+
+        def fetchall(self):
+            return self.rows
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+    def test_only_fixed_column_names_reach_the_sql_and_values_are_parameters(self):
+        from src.services import fetch_postgre_database as database
+
+        recorder = self.Recorder()
+        database.fetch_reports_for_staff(recorder, status="x'; DROP TABLE reports; --", city="pasig", limit=500)
+        sql, values = recorder.calls[0]
+        self.assertNotIn("DROP", sql)
+        self.assertIn("status ILIKE %s", sql)
+        self.assertEqual(values[0], "x'; DROP TABLE reports; --")
+        self.assertTrue(sql.endswith("LIMIT 50"))  # never more than 50 rows
+
+    def test_update_and_summary_refuse_other_tables(self):
+        from src.services import fetch_postgre_database as database
+
+        for call in (lambda: database.update_status(self.Recorder(), "users", REPORT_ID, "verified"),
+                     lambda: database.summarize_table(self.Recorder(), "ncr_locations")):
+            with self.assertRaises(ValueError):
+                call()
+
+    def test_update_status_reports_whether_a_row_changed(self):
+        from src.services import fetch_postgre_database as database
+
+        self.assertTrue(database.update_status(self.Recorder(rowcount=1), "reports", REPORT_ID, "verified"))
+        self.assertFalse(database.update_status(self.Recorder(rowcount=0), "reports", REPORT_ID, "verified"))
 
 
 class EvacuationCenterTests(unittest.TestCase):

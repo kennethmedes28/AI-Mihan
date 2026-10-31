@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/public/flood-gentic_cropped.gif" alt="Flood-Gentic" height="auto" width="100%">
+  <img src="frontend/public/flood-gentic_cropped_powered-by-metaai.gif" alt="Flood-Gentic" height="auto" width="100%">
 </p>
 
 <h1 align="center" id="title">
@@ -94,7 +94,7 @@ flowchart LR
 2. Backup sources, each read on its own: tide height, ground height, and the official sites (NDRRMC, Red Cross, DSWD).
 3. A fixed safety answer, when too few readings are left to say anything responsible.
 
-Locations are read from GPS coordinates, "Brgy. Name, City", or a place next to a city ("7-11, Tambo, Parañaque City").
+Locations are read from GPS coordinates, "Brgy. Name, City", or a place next to a city ("Okada, Parañaque").
 If only the city is known, the answer says distances are from the city centre.
 
 ## Repository layout
@@ -167,6 +167,7 @@ For local work without the Postgres conversation store, add `CHECKPOINTER=memory
 | POST | `/chat` | One message in, one reply out. Send back the returned `thread_id` to continue the conversation |
 | POST, GET | `/reports` | Submit or list community flood reports (unverified) |
 | POST | `/requests` | Submit a supply or assistance request (write only) |
+| GET, PATCH | `/staff/...` | Staff only: summary counts, the full lists, and verifying, rejecting or assigning items. Needs `STAFF_API_KEY` |
 | GET | `/evacuation-centers` | Search the centers by city and barangay |
 | GET | `/advisories/latest` | Current PAGASA bulletins |
 | GET | `/health`, `/health/ready` | What works right now |
@@ -178,7 +179,21 @@ curl -s localhost:8000/chat -H 'Content-Type: application/json' \
 ```
 
 Optional settings (environment variables): `CORS_ORIGINS`, `CHECKPOINTER` (`postgres` or `memory`), `ENABLE_RAG`,
-`TRUST_PROXY_HEADERS`, `CHAT_PER_MINUTE`, `REPORTS_PER_HOUR`, `REQUESTS_PER_HOUR`, `ORS_API_KEY`.
+`TRUST_PROXY_HEADERS`, `CHAT_PER_MINUTE`, `REPORTS_PER_HOUR`, `REQUESTS_PER_HOUR`, `ORS_API_KEY`, `STAFF_API_KEY`, `STAFF_PER_MINUTE`.
+
+### Monitor reports and requests (staff)
+
+Set a long random `STAFF_API_KEY` in `backend/.env` to switch on the `/staff` endpoints. Without it they do not exist.
+Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"`, keep it private, and send it as a bearer token:
+
+```bash
+curl -s localhost:8000/staff/summary -H "Authorization: Bearer $STAFF_API_KEY"                  # what is waiting
+curl -s 'localhost:8000/staff/requests?status=unverified' -H "Authorization: Bearer $STAFF_API_KEY"
+curl -s -X PATCH localhost:8000/staff/requests/<id> -H "Authorization: Bearer $STAFF_API_KEY" \
+  -H 'Content-Type: application/json' -d '{"status": "assigned"}'
+```
+
+`/staff/summary` shows totals by status and city and how long the oldest unreviewed item has waited, so a growing backlog is easy to spot.
 See [docs/backend_architecture.md](docs/backend_architecture.md) section 4.
 
 ### Create the missing tables
@@ -232,9 +247,9 @@ do not walk or drive through floodwater. Official sources: [pagasa.dost.gov.ph](
 - **A stale PAGASA bulletin still counts as reliable** if it is long and well formed. There is no check on its issue time yet.
 - **Backup sources are limited.** MMDA gauges (blocked by a site challenge), Project NOAH (a JavaScript app with no searchable text) and GPM IMERG satellite rainfall (needs a NASA login) are not used.
 - **Tide and ground-height rules are rules of thumb** (high tide at 1.2 m or more, low ground at 5 m or less) and are untuned. The tide model only covers the sea, so inland cities often have no tide data.
-- **Only the city is recorded for a typed place.** A subdivision such as "Gentry Manor" is found on the map, but the barangay ("Tambo") is not saved with the location.
+- **Only the city is recorded for a typed place.** A subdivision such as "Okada, Parañaque" is found on the map, but the barangay ("Tambo") is not saved with the location.
 - **No app yet.** The API works, but there is no frontend. `/chat` returns the whole reply at once (no streaming) and no list of sources, and photos or videos cannot be sent to it yet.
-- **No staff access.** Requests and reports can be submitted, but there is no protected view for barangay or DRRMO staff, and the API has no login.
+- **Staff access is one shared key.** The `/staff` endpoints let staff review reports and requests, but there are no personal accounts, so a status change does not record who made it. There is no staff screen yet, only the API.
 
 ## Future improvements
 
@@ -242,7 +257,7 @@ do not walk or drive through floodwater. Official sources: [pagasa.dost.gov.ph](
 - Build the Next.js frontend.
 - Run the table scripts in `backend/sql/` on Supabase.
 - Stream `/chat` replies and return a list of sources with each answer; accept a photo or video on `/chat`.
-- Add a protected staff view for reports and requests, with login.
+- Add a staff screen to the frontend, with a personal login per staff member so every review is attributed.
 - Add CI: backend tests and lint, frontend build, secret scanning and dependency updates.
 - Add an alert when the nightly dataset update fails, and a check that the newest CSV date is recent.
 
@@ -284,7 +299,7 @@ MIT. See [LICENSE](LICENSE).
 
 
 <footer align="center">
-  <a href="frontend/public/thankyou_footer.jpg" target="_blank">
-    <img src="frontend/public/thankyou_footer.jpg" alt="Flood-Gents" width="100%">
+  <a href="frontend/public/thankyou_footer_floodgentic.jpg" target="_blank">
+    <img src="frontend/public/thankyou_footer_floodgentic.jpg" alt="Flood-Gents" width="100%">
   </a>
 </footer>
